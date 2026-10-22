@@ -1,0 +1,513 @@
+generator client {
+  provider = "prisma-client-js"
+}
+datasource db {
+  provider = "postgresql"
+  url = env("DATABASE_URL")
+}
+model User {
+  id String @id @default(cuid())
+  email String @unique
+  name String
+  phone String @unique
+  passwordHash String
+  residentType String @default("PRIVATE")
+  institution String?
+  emergencyName String?
+  emergencyPhone String?
+  emailVerifiedAt DateTime?
+  phoneVerifiedAt DateTime?
+  mfaSecret String?
+  mfaConfirmed Boolean @default(false)
+  active Boolean @default(true)
+  createdAt DateTime @default(now())
+  memberships Membership[]
+  sessions Session[]
+  challenges Challenge[]
+  applications Application[]
+  reservations Reservation[]
+  waitlist Waitlist[]
+  documents Document[]
+  charges Charge[]
+  payments Payment[]
+  leases Lease[]
+  tickets Ticket[]
+  notifications Notification[]
+  consents Consent[]
+}
+model Membership {
+  id String @id @default(cuid())
+  userId String
+  propertyId String
+  role String
+  user User @relation(fields:[userId],references:[id],onDelete:Restrict)
+  property Property @relation(fields:[propertyId],references:[id],onDelete:Restrict)
+  @@unique([userId,propertyId,role])
+}
+model Session {
+  id String @id @default(cuid())
+  tokenHash String @unique
+  userId String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  user User @relation(fields:[userId],references:[id],onDelete:Cascade)
+  @@index([userId])
+}
+model Challenge {
+  id String @id @default(cuid())
+  userId String
+  kind String
+  tokenHash String @unique
+  expiresAt DateTime
+  consumedAt DateTime?
+  user User @relation(fields:[userId],references:[id],onDelete:Cascade)
+}
+model RateLimit {
+  key String @id
+  count Int @default(1)
+  resetAt DateTime
+}
+model Property {
+  id String @id @default(cuid())
+  name String
+  slug String @unique
+  description String
+  location String
+  currency String @default("USD")
+  legalEntity String?
+  holdMinutes Int @default(15)
+  depositMinor BigInt @default(3000)
+  makerChecker Boolean @default(true)
+  published Boolean @default(false)
+  createdAt DateTime @default(now())
+  buildings Building[]
+  memberships Membership[]
+  applications Application[]
+  reservations Reservation[]
+  waitlist Waitlist[]
+  documents Document[]
+  charges Charge[]
+  payments Payment[]
+  templates LeaseTemplate[]
+  leases Lease[]
+  tickets Ticket[]
+  announcements Announcement[]
+  integrations Integration[]
+}
+model Building {
+  id String @id @default(cuid())
+  propertyId String
+  name String
+  property Property @relation(fields:[propertyId],references:[id],onDelete:Restrict)
+  floors Floor[]
+  @@unique([propertyId,name])
+}
+model Floor {
+  id String @id @default(cuid())
+  buildingId String
+  name String
+  level Int
+  building Building @relation(fields:[buildingId],references:[id],onDelete:Restrict)
+  rooms Room[]
+  @@unique([buildingId,level])
+}
+model Room {
+  id String @id @default(cuid())
+  floorId String
+  name String
+  category String
+  accessible Boolean @default(false)
+  monthlyMinor BigInt
+  floor Floor @relation(fields:[floorId],references:[id],onDelete:Restrict)
+  beds Bed[]
+  @@unique([floorId,name])
+}
+model Bed {
+  id String @id @default(cuid())
+  roomId String
+  label String
+  blocked Boolean @default(false)
+  room Room @relation(fields:[roomId],references:[id],onDelete:Restrict)
+  reservations Reservation[]
+  @@unique([roomId,label])
+}
+model Reservation {
+  id String @id @default(cuid())
+  propertyId String
+  userId String
+  bedId String
+  applicationId String?
+  priceSnapshot Json?
+  startAt DateTime
+  endAt DateTime
+  state String @default("HOLD")
+  expiresAt DateTime?
+  createdAt DateTime @default(now())
+  property Property @relation(fields:[propertyId],references:[id],onDelete:Restrict)
+  user User @relation(fields:[userId],references:[id],onDelete:Restrict)
+  bed Bed @relation(fields:[bedId],references:[id],onDelete:Restrict)
+  application Application? @relation(fields:[applicationId],references:[id],onDelete:Restrict)
+  lease Lease?
+  @@index([state,expiresAt])
+  @@index([userId])
+}
+model Waitlist {
+  id String @id @default(cuid())
+  userId String
+  propertyId String
+  startAt DateTime
+  endAt DateTime
+  state String @default("WAITING")
+  offeredReservationId String?
+  priority Int @default(0)
+  createdAt DateTime @default(now())
+  user User @relation(fields:[userId],references:[id],onDelete:Restrict)
+  property Property @relation(fields:[propertyId],references:[id],onDelete:Restrict)
+  @@unique([userId,propertyId,startAt,endAt])
+}
+model Application {
+  id String @id @default(cuid())
+  userId String
+  propertyId String
+  status String @default("SUBMITTED")
+  message String?
+  decisionReason String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields:[userId],references:[id],onDelete:Restrict)
+  property Property @relation(fields:[propertyId],references:[id],onDelete:Restrict)
+  reservations Reservation[]
+  documents Document[]
+  history ApplicationHistory[]
+  lease Lease?
+}
+model ApplicationHistory {
+  id String @id @default(cuid())
+  applicationId String
+  actorId String
+  status String
+  reason String?
+  createdAt DateTime @default(now())
+  application Application @relation(fields:[applicationId],references:[id],onDelete:Restrict)
+}
+model Consent {
+  id String @id @default(cuid())
+  userId String
+  purpose String
+  version String
+  documentHash String
+  createdAt DateTime @default(now())
+  user User @relation(fields:[userId],references:[id],onDelete:Restrict)
+}
+model Document {
+  id String @id @default(cuid())
+  userId String
+  propertyId String
+  applicationId String?
+  kind String
+  filename String
+  mime String
+  bytes Int
+  hash String
+  storageKey String @unique
+  version Int @default(1)
+  state String @default("QUARANTINED")
+  scanResult String?
+  reviewerId String?
+  reason String?
+  createdAt DateTime @default(now())
+  user User @relation(fields:[userId],references:[id],onDelete:Restrict)
+  property Property @relation(fields:[propertyId],references:[id],onDelete:Restrict)
+  application Application? @relation(fields:[applicationId],references:[id],onDelete:Restrict)
+  @@index([state,createdAt])
+}
+model Charge {
+  id String @id @default(cuid())
+  userId String
+  propertyId String
+  reference String @unique
+  category String
+  description String
+  amountMinor BigInt
+  currency String
+  dueAt DateTime
+  createdAt DateTime @default(now())
+  user User @relation(fields:[userId],references:[id],onDelete:Restrict)
+  property Property @relation(fields:[propertyId],references:[id],onDelete:Restrict)
+  allocations Allocation[]
+  credits Credit[]
+}
+model Credit {
+  id String @id @default(cuid())
+  chargeId String
+  amountMinor BigInt
+  reason String
+  actorId String
+  reference String @unique
+  createdAt DateTime @default(now())
+  charge Charge @relation(fields:[chargeId],references:[id],onDelete:Restrict)
+}
+model Payment {
+  id String @id @default(cuid())
+  userId String
+  propertyId String
+  reference String @unique
+  idempotencyKey String @unique
+  amountMinor BigInt
+  currency String
+  method String
+  status String @default("PENDING")
+  providerId String? @unique
+  pollUrl String?
+  redirectUrl String?
+  proofDocumentId String?
+  proofHash String?
+  bankReference String?
+  proposedBy String?
+  approvedBy String?
+  createdAt DateTime @default(now())
+  settledAt DateTime?
+  user User @relation(fields:[userId],references:[id],onDelete:Restrict)
+  property Property @relation(fields:[propertyId],references:[id],onDelete:Restrict)
+  @@unique([propertyId,bankReference])
+  allocations Allocation[]
+  receipt Receipt?
+  refunds Refund[]
+}
+model Allocation {
+  id String @id @default(cuid())
+  paymentId String
+  chargeId String
+  amountMinor BigInt
+  createdAt DateTime @default(now())
+  payment Payment @relation(fields:[paymentId],references:[id],onDelete:Restrict)
+  charge Charge @relation(fields:[chargeId],references:[id],onDelete:Restrict)
+  reversals AllocationReversal[]
+  @@unique([paymentId,chargeId])
+}
+model Refund {
+  id String @id @default(cuid())
+  paymentId String
+  amountMinor BigInt
+  reason String
+  actorId String
+  reference String @unique
+  createdAt DateTime @default(now())
+  payment Payment @relation(fields:[paymentId],references:[id],onDelete:Restrict)
+  reversals AllocationReversal[]
+}
+model AllocationReversal {
+  id String @id @default(cuid())
+  allocationId String
+  refundId String
+  amountMinor BigInt
+  allocation Allocation @relation(fields:[allocationId],references:[id],onDelete:Restrict)
+  refund Refund @relation(fields:[refundId],references:[id],onDelete:Restrict)
+  @@unique([allocationId,refundId])
+}
+model Receipt {
+  id String @id @default(cuid())
+  paymentId String @unique
+  number String @unique
+  snapshot Json
+  issuedAt DateTime @default(now())
+  payment Payment @relation(fields:[paymentId],references:[id],onDelete:Restrict)
+}
+model LeaseTemplate {
+  id String @id @default(cuid())
+  propertyId String
+  version Int
+  title String
+  body String
+  hash String
+  approvedAt DateTime?
+  approvedBy String?
+  property Property @relation(fields:[propertyId],references:[id],onDelete:Restrict)
+  leases Lease[]
+  @@unique([propertyId,version])
+}
+model Lease {
+  id String @id @default(cuid())
+  userId String
+  propertyId String
+  applicationId String @unique
+  reservationId String @unique
+  templateId String
+  status String @default("AWAITING_SIGNATURE")
+  documentSnapshot String
+  documentHash String
+  signedDocumentId String?
+  signedHash String?
+  signedAt DateTime?
+  executedAt DateTime?
+  approvedBy String?
+  createdAt DateTime @default(now())
+  user User @relation(fields:[userId],references:[id],onDelete:Restrict)
+  property Property @relation(fields:[propertyId],references:[id],onDelete:Restrict)
+  application Application @relation(fields:[applicationId],references:[id],onDelete:Restrict)
+  reservation Reservation @relation(fields:[reservationId],references:[id],onDelete:Restrict)
+  template LeaseTemplate @relation(fields:[templateId],references:[id],onDelete:Restrict)
+  events LeaseEvent[]
+}
+model LeaseEvent {
+  id String @id @default(cuid())
+  leaseId String
+  actorId String
+  type String
+  evidence Json
+  createdAt DateTime @default(now())
+  lease Lease @relation(fields:[leaseId],references:[id],onDelete:Restrict)
+}
+model Ticket {
+  id String @id @default(cuid())
+  propertyId String
+  userId String
+  type String
+  category String
+  priority String @default("NORMAL")
+  subject String
+  body String
+  status String @default("OPEN")
+  assignedTo String?
+  dueAt DateTime
+  firstResponseAt DateTime?
+  resolvedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  property Property @relation(fields:[propertyId],references:[id],onDelete:Restrict)
+  user User @relation(fields:[userId],references:[id],onDelete:Restrict)
+  messages TicketMessage[]
+}
+model TicketMessage {
+  id String @id @default(cuid())
+  ticketId String
+  actorId String
+  body String
+  documentId String?
+  createdAt DateTime @default(now())
+  ticket Ticket @relation(fields:[ticketId],references:[id],onDelete:Restrict)
+}
+model Announcement {
+  id String @id @default(cuid())
+  propertyId String
+  title String
+  body String
+  createdAt DateTime @default(now())
+  property Property @relation(fields:[propertyId],references:[id],onDelete:Restrict)
+}
+model Notification {
+  id String @id @default(cuid())
+  userId String
+  title String
+  body String
+  readAt DateTime?
+  createdAt DateTime @default(now())
+  user User @relation(fields:[userId],references:[id],onDelete:Restrict)
+}
+model AuditEvent {
+  id String @id @default(cuid())
+  actorId String
+  propertyId String?
+  action String
+  objectId String
+  detail Json
+  traceId String
+  createdAt DateTime @default(now())
+  @@index([propertyId,createdAt])
+}
+model OutboxEvent {
+  id String @id @default(cuid())
+  type String
+  propertyId String?
+  userId String?
+  payload Json
+  version Int @default(1)
+  traceId String
+  state String @default("PENDING")
+  attempts Int @default(0)
+  availableAt DateTime @default(now())
+  lockedAt DateTime?
+  lastError String?
+  createdAt DateTime @default(now())
+  @@index([state,availableAt])
+}
+model InboxEvent {
+  id String @id @default(cuid())
+  provider String
+  externalId String
+  payloadHash String
+  createdAt DateTime @default(now())
+  @@unique([provider,externalId])
+}
+model Integration {
+  id String @id @default(cuid())
+  propertyId String
+  provider String
+  status String @default("READY_FOR_CREDENTIALS")
+  config Json
+  secretEncrypted String?
+  lastCheckedAt DateTime?
+  property Property @relation(fields:[propertyId],references:[id],onDelete:Restrict)
+  @@unique([propertyId,provider])
+}
+model Enquiry {
+  id String @id @default(cuid())
+  name String
+  email String
+  message String
+  createdAt DateTime @default(now())
+}
+model TenancyRequest {
+  id String @id @default(cuid())
+  leaseId String
+  userId String
+  propertyId String
+  type String
+  targetBedId String
+  startAt DateTime
+  endAt DateTime
+  reason String
+  state String @default("PENDING")
+  reviewedBy String?
+  reviewReason String?
+  newApplicationId String?
+  createdAt DateTime @default(now())
+}
+model PrivacyRequest {
+  id String @id @default(cuid())
+  userId String
+  type String
+  reason String
+  state String @default("OPEN")
+  resolution String?
+  createdAt DateTime @default(now())
+}
+model NotificationPreference {
+  userId String @id
+  email Boolean @default(true)
+  sms Boolean @default(false)
+}
+model ApiKey {
+  id String @id @default(cuid())
+  name String
+  userId String
+  propertyId String
+  tokenHash String @unique
+  scopes String[]
+  expiresAt DateTime
+  active Boolean @default(true)
+  createdAt DateTime @default(now())
+}
+model RatePlan {
+  id String @id @default(cuid())
+  propertyId String
+  roomId String?
+  bedId String?
+  title String
+  startAt DateTime
+  endAt DateTime
+  minNights Int @default(1)
+  monthlyMinor BigInt
+  priority Int @default(0)
+  createdAt DateTime @default(now())
+}

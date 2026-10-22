@@ -1,0 +1,33 @@
+# Role guides
+
+All screenshots, when present, use synthetic local records. See screenshots/ for captures from the functioning local build.
+
+## Resident / student
+
+Register with a strong password; students add their institution, private tenants do not. Verify both email and mobile using configured provider codes. Use MFA if desired. Browse the accessible room list by property, dates, floor and category. Reserve one available bed after reading the application policy; holds expire. Upload identity/residence and student registration evidence where required. Files stay quarantined until scanned; rejection reasons support resubmission. Medical files have narrower staff access.
+
+Track status and next actions in My home. After approval, pay the issued deposit through a configured gateway or upload bank proof and submit its reference; proof is not settlement. Download issued invoices and verified receipts. Download your agreement, upload its signed copy, and submit for review. Staff approve execution and check-in separately. Keep emergency contacts current. Create maintenance, complaint, compliment or support tickets and follow responses. Request renewal/transfer with the target bed and dates; approval requires clear arrears and fresh availability. Give exit notice; checkout/inspection and deposit disposition require staff approval. Revoke sessions, update notification preferences or submit a privacy request under Profile & security.
+
+## Admissions / front desk
+
+Enroll MFA before staff sign-in. Select your property; other properties remain denied. Review application history and required KYC approvals. Approval requires a live bed hold and verified required documents. Expired holds must be reselected safely. Decline with a reason. Deposits and signing remain separate from admission approval. Use the waitlist priority command only under approved priority policy and record a reason.
+
+## KYC / leasing
+
+Download only files authorized for your role/property. A clean scan is required before review; record approval/rejection and reasons. Standard KYC does not grant medical access. Issue the latest legally approved template after deposit confirmation. Verify the exact scanned signed copy and resident identity, record execution review, and preserve immutable hash/version/time evidence. Never edit executed terms; renewals/transfers produce new agreements.
+
+## Finance
+
+Use real charge references and correct currency; recurring billing uses a stable reservation/month key. Check derived balances, open invoices and unallocated credit. Verify bank evidence against the actual bank source; reject mismatches. Makers cannot approve their own proof proposal when maker-checker is enabled. Settlement posts allocations and receipt atomically. Download receipts; retain corrections through credits/refunds/reversals. A refund command records an externally verified transfer; it does not move money. Use scoped accounting CSV exports and reconcile their receiving-system mappings. Never delete financial records.
+
+## Property operations / caretaker
+
+Manage bed blocks and turnover only with your granted permissions; committed inventory cannot be casually blocked. Check-in requires an executed agreement, confirmed reservation, required deposit and emergency contacts. Checkout captures inspection and blocks the bed for turnover. Resolve the maintenance block explicitly after inspection. Assign tickets only to authorized property staff, record first response and resolution, and respond to SLA escalations. Another property's ticket ID does not grant access.
+
+## Executive / auditor
+
+Use property reports with definitions and actual denominators. Occupancy counts checked-in residents; unoccupied capacity is not a date-specific availability claim. Finance exports require separate finance-read permission. The read-only audit view preserves actor, time, object and trace reference. CSV and API pagination must be followed; one page is not the full ledger.
+
+## System administrator
+
+Grant minimum scoped roles only after the user enrolls MFA. Revoke access promptly; check audit records. Add verified property inventory and approved template versions. Use integration local connection checks with their stated limits. Create expiring scoped read-only keys; copy them once into the receiving system's secure store and revoke old ones. Never paste private records or keys into support chats. Follow RUNBOOK for backups, restore, failures, security response and production gates.

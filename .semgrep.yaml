@@ -1,0 +1,26 @@
+rules:
+  - id: legacy-no-eval
+    languages: [typescript, javascript]
+    message: Dynamic code execution is prohibited.
+    severity: ERROR
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: new Function(...)
+  - id: legacy-no-untrusted-html
+    languages: [typescript, javascript]
+    message: Do not render untrusted HTML; use escaped React text or safe PDF primitives.
+    severity: ERROR
+    pattern: <$X dangerouslySetInnerHTML={...} />
+  - id: legacy-no-tls-bypass
+    languages: [typescript, javascript]
+    message: TLS certificate verification must remain enabled.
+    severity: ERROR
+    pattern-either:
+      - pattern: process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
+      - pattern: "{rejectUnauthorized: false, ...}"
+  - id: legacy-no-unsafe-raw-interpolation
+    languages: [typescript, javascript]
+    message: Do not interpolate caller data into raw SQL strings.
+    severity: ERROR
+    patterns:
+      - pattern: $DB.$queryRawUnsafe(`...${$X}...`, ...)

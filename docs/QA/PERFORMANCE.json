@@ -1,0 +1,36 @@
+{
+  "measuredAt": "2026-10-22T15:15:42.722Z",
+  "mode": "local production build; warm small synthetic dataset",
+  "records": [
+    {
+      "endpoint": "/api/health",
+      "requests": 50,
+      "concurrency": 5,
+      "p50Ms": 7.4,
+      "p95Ms": 12.37,
+      "maxMs": 12.62,
+      "errors": 0
+    },
+    {
+      "endpoint": "/rooms?property=demo-property-1",
+      "requests": 50,
+      "concurrency": 5,
+      "p50Ms": 56.34,
+      "p95Ms": 74.63,
+      "maxMs": 74.97,
+      "errors": 0
+    }
+  ],
+  "accountRead": {
+    "sqlQueries": 8,
+    "elapsedMs": 30.17
+  },
+  "dataset": {
+    "users": 8,
+    "properties": 2,
+    "beds": 36,
+    "charges": 2,
+    "payments": 1,
+    "receipts": 1
+  }
+}

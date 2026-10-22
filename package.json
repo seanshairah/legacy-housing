@@ -1,0 +1,56 @@
+{
+  "name": "legacy-heights",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "dev": "next dev --webpack",
+    "build": "prisma generate && next build --webpack",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "db:generate": "prisma generate",
+    "db:deploy": "prisma migrate deploy",
+    "db:seed": "node --env-file=.env --import tsx scripts/seed.ts",
+    "worker": "node --env-file=.env --import tsx scripts/worker.ts",
+    "postinstall": "prisma generate",
+    "format": "prettier --write src scripts tests docs \"*.ts\" \"*.mjs\" \"*.json\" \"*.yaml\" .github/workflows/ci.yml",
+    "format:check": "prettier --check src scripts tests docs \"*.ts\" \"*.mjs\" \"*.json\" \"*.yaml\" .github/workflows/ci.yml",
+    "demo:journey": "node --env-file=.env --import tsx scripts/demo-journey.ts",
+    "backup": "node --env-file=.env --import tsx scripts/backup.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "6.19.3",
+    "lucide-react": "^0.577.0",
+    "next": "16.4.2",
+    "otpauth": "^9.4.1",
+    "pdf-lib": "^1.17.1",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "sharp": "^0.35.5",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.14.0",
+    "@eslint/js": "^9.39.5",
+    "@playwright/test": "^1.58.0",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "eslint": "^9.39.0",
+    "prettier": "^3.9.10",
+    "prisma": "6.19.3",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.72.0",
+    "vitest": "^4.0.0"
+  },
+  "type": "module",
+  "overrides": {
+    "deepmerge-ts": "8.0.2"
+  }
+}
