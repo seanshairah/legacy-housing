@@ -1,0 +1,18 @@
+# Threat model and ASVS-oriented control map
+
+Trust boundaries: browser ↔ web; web/worker ↔ dedicated DB; private file volume ↔ scanner; outbound fixed provider hosts; staff roles/property grants; operating-system/KMS/backup operator. Primary assets: credentials/sessions, ID/medical files, financial evidence, bed allocation, executed leases and immutable audit events.
+
+| Attack path | Control / evidence | Remaining release gate |
+|---|---|---|
+| Session theft/replay, stale role | Opaque hashed expiring sessions; secure/httpOnly/strict cookies; revocation/reset tests; live property grants | Production TLS/proxy review and independent auth assessment |
+| IDOR/BOLA, privilege escalation | Service role/property/object checks; medical separation; negative property tests | Broader matrix across every endpoint and export |
+| Booking race | Bed lock, serializable bounded retries, database date exclusions | Production load/operational policy tests |
+| Payment forgery/replay and audit loss | Signed authoritative confirmation, intent matching, unique receipt, account lock, atomic audit | Actual gateway contract/sandbox/outage verification |
+| Malicious upload / private disclosure | Format signatures, 10 MB bound, encryption, quarantine, real ClamAV, authenticated downloads | Production key management, deep parser/complex file corpus review and retention sign-off |
+| Stored XSS / document injection | React escaping, PDF text primitives, attachment/no-store, CSP/frame/ MIME controls | Production CSP nonce hardening and penetration test |
+| CSRF / brute force | Exact origin for browser mutations, strict cookies, DB rate limiter | Trusted proxy and anti-abuse monitoring integration |
+| SSRF / credential exposure | Fixed provider destinations, strict Paynow URL allowlist; no arbitrary user URL forwarding; encrypted secrets, hashed API keys | Review selected new adapters before enabling external synchronization |
+| Audit/lease/finance tampering | Append-only DB triggers, restricted relations, immutable signed hashes, append corrections | Least-privileged production DB role; operator access monitoring |
+| Disaster / key loss | Independent backup encryption and verified local restore/files | Offsite copy, key escrow/versioning, production recovery drill |
+
+This map follows relevant ASVS 5.0 areas (architecture, authentication, session, access control, validation, stored cryptography, data protection, communications, files, APIs, configuration and logging). It is **not** a completed requirement-by-requirement ASVS verification or legal certification. Full independent ASVS assessment and Zimbabwe data/signature legal review remain launch gates.

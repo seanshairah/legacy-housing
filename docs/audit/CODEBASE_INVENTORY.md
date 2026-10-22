@@ -1,0 +1,5 @@
+# Reference inventory
+
+Reference SHA: a795d790533b31209c820311f27ebb035ae30872. Static inspection of Next 15 / React 19 / TypeScript / Prisma 6 / PostgreSQL source: marketing, owner/student/caretaker portals, applications, invoices, charges and allocations, Paynow polling/result callback, HTML financial documents, service requests, email/SMS adapters, roster import, reports, health scheduler. Six SQL migrations. Roles OWNER/CARETAKER/STUDENT. Separate branded deployments and databases, no cross-property permission model.
+Nine Vitest files; database suites serialized. Prior onboarding ran 10 independent parser/profile tests successfully. Full baseline was blocked at Prisma engine download; no source tests or migrations were rerun in this build task because the source is read-only. No baseline application behavior is claimed verified. README claims are not acceptance evidence.
+Target starts empty. Node 24 LTS and a modular Next/PostgreSQL application are selected. Public domain, resident and staff workspaces share transactional domain services. No source branding, rates or assets will be copied.

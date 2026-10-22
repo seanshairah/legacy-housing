@@ -1,0 +1,5 @@
+# Interface decisions
+
+Neutral Legacy Heights typography, warm off-white surfaces, forest-green actions and restrained clay accents. Brand tokens live in globals.css. Illustrations are original CSS architectural abstractions, labelled as illustrations rather than real property photography. No reference-brand names, prices, contacts, images or testimonials are reused.
+
+Public discovery → accessible floor/room list → registration/verification → reservation → action-first resident portal. Staff get separate admission, inventory, KYC, finance, lease, operations, integration, report and security pages. Empty states explain the next action. Server forms report validation/authorization results; loading/connection feedback exists in credential forms. Tables scroll within their containers on mobile; semantic headings/labels, skip link, keyboard focus and reduced-motion support are included. Automated contrast findings are fixed rather than ignored. Manual screen-reader review is still required before release.
