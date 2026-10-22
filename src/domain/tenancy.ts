@@ -221,7 +221,7 @@ export async function billCurrentMonth(now = new Date()) {
           description: `Rent ${month} (${days}/${monthDays} days; configured room rate)`,
           amountMinor,
           currency: l.property.currency,
-          dueAt: start,
+          dueAt: s,
         },
       });
       await event(

@@ -63,6 +63,18 @@ export default async function Workspace({
     needle = (q.search || "").slice(0, 80),
     page = Math.max(1, Math.min(10000, parseInt(q.page || "1") || 1)),
     skip = (page - 1) * 20;
+  const supportFiles =
+    section === "operations"
+      ? await db.document.findMany({
+          where: {
+            userId: u.id,
+            propertyId: p,
+            kind: "SUPPORT",
+            state: { in: ["CLEAN", "APPROVED"] },
+          },
+          select: { id: true, filename: true },
+        })
+      : [];
   const templates =
     section === "leases"
       ? await db.leaseTemplate.findMany({
@@ -882,6 +894,29 @@ export default async function Workspace({
                 <h2>Service, feedback & complaints</h2>
                 <Badge>{openTickets} open</Badge>
               </div>
+              <form
+                action="/api/actions"
+                method="post"
+                encType="multipart/form-data"
+                className="inline-fields"
+              >
+                <input type="hidden" name="action" value="upload" />
+                <input type="hidden" name="next" value={next} />
+                <input type="hidden" name="propertyId" value={p} />
+                <input type="hidden" name="kind" value="SUPPORT" />
+                <label>
+                  Upload a support attachment
+                  <input
+                    name="file"
+                    type="file"
+                    accept=".pdf,.png,.jpg,.jpeg"
+                    required
+                  />
+                </label>
+                <button className="button secondary">
+                  Upload for scanning
+                </button>
+              </form>
               {(
                 await db.ticket.findMany({
                   where: {
@@ -926,6 +961,15 @@ export default async function Workspace({
                   {t.messages.map((m) => (
                     <p className="ticket-message" key={m.id}>
                       {m.body}
+                      {m.documentId && (
+                        <a
+                          className="text-link"
+                          href={`/api/documents/${m.documentId}`}
+                        >
+                          {" "}
+                          Download attachment ↗
+                        </a>
+                      )}
                     </p>
                   ))}
                   <ActionForm action="ticket.update" next={next} id={t.id}>
@@ -951,6 +995,17 @@ export default async function Workspace({
                           {operators.map((m) => (
                             <option key={m.id} value={m.userId}>
                               {m.user.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        Scanned attachment
+                        <select name="documentId">
+                          <option value="">No attachment</option>
+                          {supportFiles.map((d) => (
+                            <option key={d.id} value={d.id}>
+                              {d.filename}
                             </option>
                           ))}
                         </select>
@@ -1134,6 +1189,47 @@ async function Finance({
   );
   return (
     <>
+      {canWrite && (
+        <section className="panel">
+          <h2>Record received cash for independent verification</h2>
+          <p className="muted">
+            Staff only. This creates a pending tender, not a settled payment. A
+            separate reviewer verifies the cash/voucher when maker-checker is
+            enabled.
+          </p>
+          <ActionForm
+            action="payment"
+            next={next}
+            propertyId={p}
+            method="CASH"
+            idempotencyKey={crypto.randomUUID()}
+          >
+            <div className="inline-fields">
+              <label>
+                Resident
+                <select name="userId">
+                  {residents.map((a) => (
+                    <option key={a.id} value={a.userId}>
+                      {a.user.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Amount received
+                <input name="amount" required />
+              </label>
+              <label>
+                Unique cash voucher reference
+                <input name="bankReference" required />
+              </label>
+              <button className="button secondary">
+                Submit cash tender for verification
+              </button>
+            </div>
+          </ActionForm>
+        </section>
+      )}
       <section className="panel">
         <div className="panel-head">
           <h2>Resident accounts</h2>
@@ -1258,7 +1354,7 @@ async function Finance({
                     </select>
                   </label>
                   <label>
-                    Bank verification evidence / reason
+                    Verified bank / cash evidence and reason
                     <input name="reason" required />
                   </label>
                   <button className="button small-button">

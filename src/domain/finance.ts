@@ -131,7 +131,7 @@ export async function proposePayment(actor: Actor, input: unknown) {
       userId: z.string(),
       amount: z.string(),
       idempotencyKey: z.string().min(12).max(120),
-      method: z.enum(["PAYNOW", "BANK"]),
+      method: z.enum(["PAYNOW", "BANK", "CASH"]),
       proofDocumentId: z.string().optional(),
       bankReference: z.string().max(120).optional(),
     })
@@ -140,6 +140,11 @@ export async function proposePayment(actor: Actor, input: unknown) {
   if (amountMinor <= 0n) throw new Error("POSITIVE_AMOUNT_REQUIRED");
   return transaction(async (tx) => {
     await ownerOrPermit(actor, d.userId, d.propertyId, "finance", tx);
+    if (d.method === "CASH") {
+      await permit(actor, d.propertyId, "finance", tx);
+      if (!d.bankReference?.trim())
+        throw new Error("CASH_VOUCHER_REFERENCE_REQUIRED");
+    }
     await lockAccount(tx, d.userId);
     const existing = await tx.payment.findUnique({
       where: { idempotencyKey: d.idempotencyKey },
@@ -171,8 +176,14 @@ export async function proposePayment(actor: Actor, input: unknown) {
       }
     }
     const totals = await account(d.userId, d.propertyId, tx);
-    if (amountMinor > totals.outstanding)
+    if (d.method === "PAYNOW" && amountMinor > totals.outstanding)
       throw new Error("AMOUNT_EXCEEDS_BALANCE");
+    if (
+      !(await tx.application.count({
+        where: { userId: d.userId, propertyId: d.propertyId },
+      }))
+    )
+      throw new Error("RESIDENT_NOT_IN_PROPERTY");
     let proofHash: string | undefined;
     if (d.method === "BANK") {
       const doc = await tx.document.findUnique({
@@ -207,7 +218,7 @@ export async function proposePayment(actor: Actor, input: unknown) {
         currency: p.currency,
         reference: `LH-${crypto.randomUUID()}`,
         proposedBy: actor.id,
-        status: d.method === "BANK" ? "PROOF_REVIEW" : "PENDING",
+        status: d.method !== "PAYNOW" ? "PROOF_REVIEW" : "PENDING",
       },
     });
     await event(
@@ -311,7 +322,11 @@ export async function reviewProof(
       include: { property: true },
     });
     await permit(actor, p.propertyId, "finance", tx);
-    if (p.method !== "BANK" || p.status !== "PROOF_REVIEW" || !reason.trim())
+    if (
+      !["BANK", "CASH"].includes(p.method) ||
+      p.status !== "PROOF_REVIEW" ||
+      !reason.trim()
+    )
       throw new Error("PROOF_REVIEW_INVALID");
     if (p.property.makerChecker && p.proposedBy === actor.id)
       throw new Error("MAKER_CHECKER_REQUIRED");
@@ -331,7 +346,7 @@ export async function reviewProof(
       );
       return;
     }
-    return settle(tx, p.id, actor.id, `Bank verification: ${reason}`);
+    return settle(tx, p.id, actor.id, `Verified ${p.method} tender: ${reason}`);
   });
 }
 export async function settleProvider(

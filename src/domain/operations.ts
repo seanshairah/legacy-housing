@@ -50,7 +50,10 @@ export async function updateTicket(actor: Actor, id: string, input: unknown) {
       status: z.enum(["OPEN", "IN_PROGRESS", "WAITING", "RESOLVED", "CLOSED"]),
       body: z.string().min(2).max(5000),
       assignedTo: z.string().optional(),
-      documentId: z.string().optional(),
+      documentId: z.preprocess(
+        (v) => (v === "" ? undefined : v),
+        z.string().optional(),
+      ),
     })
     .parse(input);
   return transaction(async (tx) => {

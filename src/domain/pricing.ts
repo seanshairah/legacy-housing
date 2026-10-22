@@ -43,7 +43,7 @@ export function quoteRates(
       r.minNights <= nights,
   );
   const segments: PriceSegment[] = [];
-  let numerator = 0n;
+  const monthlyNumerators = new Map<string, bigint>();
   for (let at = start; at < end; at = new Date(at.getTime() + dayMs)) {
     const rule = matching
       .filter((r) => r.startAt <= at && r.endAt > at)
@@ -60,7 +60,11 @@ export function quoteRates(
         Date.UTC(at.getUTCFullYear(), at.getUTCMonth() + 1, 0),
       ).getUTCDate(),
       endDay = new Date(at.getTime() + dayMs).toISOString();
-    numerator += monthly * (common / BigInt(days));
+    const month = at.toISOString().slice(0, 7);
+    monthlyNumerators.set(
+      month,
+      (monthlyNumerators.get(month) || 0n) + monthly * (common / BigInt(days)),
+    );
     const previous = segments.at(-1);
     if (
       previous &&
@@ -81,7 +85,12 @@ export function quoteRates(
   return {
     version: 1,
     currency: input.currency,
-    totalMinor: String((numerator + common / 2n) / common),
+    totalMinor: String(
+      [...monthlyNumerators.values()].reduce(
+        (sum, n) => sum + (n + common / 2n) / common,
+        0n,
+      ),
+    ),
     segments,
   };
 }

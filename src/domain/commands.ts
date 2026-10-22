@@ -245,6 +245,44 @@ export async function command(
         z.enum(["APPROVED", "DECLINED"]).parse(d.decision),
         reason(),
       );
+    case "document.retry":
+      return transaction(async (tx) => {
+        const doc = await tx.document.findUniqueOrThrow({
+          where: { id: id() },
+        });
+        await permit(
+          actor,
+          doc.propertyId,
+          doc.kind === "MEDICAL"
+            ? "medical"
+            : doc.kind === "PAYMENT_PROOF"
+              ? "finance"
+              : doc.kind === "SIGNED_LEASE"
+                ? "leases"
+                : "kyc",
+          tx,
+        );
+        if (doc.state !== "SCAN_FAILED")
+          throw new Error("RETRY_REQUIRES_SCAN_FAILURE");
+        await tx.document.update({
+          where: { id: doc.id },
+          data: {
+            state: "QUARANTINED",
+            scanAttempts: 0,
+            nextScanAt: new Date(),
+            reason: reason(),
+          },
+        });
+        await event(
+          tx,
+          actor.id,
+          doc.propertyId,
+          "document.scan_retried",
+          doc.id,
+          { reason: reason() },
+          doc.userId,
+        );
+      });
     case "document.review":
       return reviewDocument(actor, id(), d.decision === "APPROVED", reason());
     case "credit.apply":

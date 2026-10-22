@@ -15,13 +15,17 @@ jobs:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: legacy_test
         ports: ["5432:5432"]
-        options: --health-cmd 'pg_isready -U postgres' --health-interval 5s --health-timeout 5s --health-retries 10
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
       scanner:
         image: clamav/clamav:stable
         env:
           CLAMAV_NO_FRESHCLAMD: "true"
         ports: ["3310:3310"]
-        options: --health-cmd 'clamdscan --ping 1' --health-interval 15s --health-timeout 10s --health-retries 20
+        options: >-
+          --health-cmd "clamdscan --ping 1"
+          --health-interval 15s --health-timeout 10s --health-retries 20
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/legacy_test
       APP_URL: http://localhost:3002

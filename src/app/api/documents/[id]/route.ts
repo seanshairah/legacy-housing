@@ -1,3 +1,4 @@
+import { rateLimit } from "../../../../domain/identity";
 import { NextResponse } from "next/server";
 import { currentUser } from "../../../../lib/current-user";
 import { download } from "../../../../domain/documents";
@@ -9,6 +10,7 @@ export async function GET(
   if (!u)
     return NextResponse.json({ error: "UNAUTHENTICATED" }, { status: 401 });
   try {
+    await rateLimit(`private-download:${u.id}`, 60);
     const { doc, bytes } = await download(u, (await params).id);
     return new Response(new Uint8Array(bytes), {
       headers: {

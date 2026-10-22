@@ -11,7 +11,7 @@ export async function workOnce() {
   await offerWaitlist();
   await scheduledReminders();
   for (const d of await db.document.findMany({
-    where: { state: "QUARANTINED" },
+    where: { state: "QUARANTINED", nextScanAt: { lte: new Date() } },
     take: 10,
   })) {
     try {
@@ -49,7 +49,9 @@ export async function workOnce() {
     try {
       if (e.type === "paynow.reconcile")
         await reconcilePaynow((e.payload as { paymentId: string }).paymentId);
-      else if (e.type.startsWith("identity.")) {
+      else if (
+        ["identity.email", "identity.phone", "identity.reset"].includes(e.type)
+      ) {
         const u = await db.user.findUniqueOrThrow({ where: { id: e.userId! } });
         const raw = decrypt(
           (e.payload as { encrypted: string }).encrypted,
@@ -121,6 +123,29 @@ export async function workOnce() {
             redirect: "error",
           });
           if (!response.ok) throw new Error("EMAIL_DELIVERY_FAILED");
+        }
+        if (preference?.sms) {
+          if (!process.env.SMSPOP_API_KEY || !process.env.SMSPOP_SENDER_ID)
+            throw new Error("SMS_PROVIDER_NOT_CONFIGURED");
+          const u = await db.user.findUniqueOrThrow({
+            where: { id: e.userId! },
+          });
+          const response = await fetch("https://smspop.co.zw/api/campaigns", {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${process.env.SMSPOP_API_KEY}`,
+              "Content-Type": "application/json",
+              "Idempotency-Key": e.id,
+            },
+            body: JSON.stringify({
+              sender_id: process.env.SMSPOP_SENDER_ID,
+              recipients: [u.phone.replace(/^\+/, "")],
+              message: `Legacy Heights: ${e.type.replaceAll(".", " ")}. Sign in to your portal for details.`,
+            }),
+            signal: AbortSignal.timeout(20000),
+            redirect: "error",
+          });
+          if (!response.ok) throw new Error("SMS_DELIVERY_FAILED");
         }
       }
       // DELIVERED means a configured outbound operation succeeded, or an internal event was consumed.

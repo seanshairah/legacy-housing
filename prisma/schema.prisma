@@ -213,6 +213,8 @@ model Document {
   version Int @default(1)
   state String @default("QUARANTINED")
   scanResult String?
+  scanAttempts Int @default(0)
+  nextScanAt DateTime @default(now())
   reviewerId String?
   reason String?
   createdAt DateTime @default(now())

@@ -45,7 +45,10 @@ export async function upload(
       ...(input.applicationId ? { id: input.applicationId } : {}),
     },
   });
-  if (!app) throw new Error("APPLICATION_REQUIRED");
+  if (!app) {
+    if (kind !== "SUPPORT") throw new Error("APPLICATION_REQUIRED");
+    await permit(actor, input.propertyId, "operations");
+  }
   if (input.bytes.length < 4 || input.bytes.length > 10 * 1024 * 1024)
     throw new Error("FILE_SIZE_LIMIT_10MB");
   const b = input.bytes;
@@ -69,7 +72,12 @@ export async function upload(
     return await transaction(async (tx) => {
       const version =
         (await tx.document.count({
-          where: { userId: actor.id, applicationId: app.id, kind },
+          where: {
+            userId: actor.id,
+            applicationId: app?.id || null,
+            propertyId: input.propertyId,
+            kind,
+          },
         })) + 1;
       if (kind === "MEDICAL")
         await tx.consent.create({
@@ -86,7 +94,7 @@ export async function upload(
         data: {
           userId: actor.id,
           propertyId: input.propertyId,
-          applicationId: app.id,
+          applicationId: app?.id || null,
           kind,
           filename: input.filename.replace(/[^\w. -]/g, "_").slice(0, 120),
           mime,
@@ -175,54 +183,84 @@ async function validatePrivateBytes(bytes: Buffer, mime: string) {
 }
 export async function scanDocument(id: string) {
   const doc = await db.document.findUniqueOrThrow({ where: { id } });
-  if (doc.state !== "QUARANTINED") return;
-  const bytes = decrypt(
-    await readFile(storagePath(doc.storageKey), "utf8"),
-    "FILE_KEY",
-  );
-  if (hash(bytes) !== doc.hash) throw new Error("DOCUMENT_INTEGRITY_FAILED");
-  if (!(await validatePrivateBytes(bytes, doc.mime))) {
+  if (doc.state !== "QUARANTINED" || doc.nextScanAt > new Date()) return;
+  if (doc.scanAttempts >= 5) {
+    await db.document.updateMany({
+      where: { id, state: "QUARANTINED" },
+      data: { state: "SCAN_FAILED" },
+    });
+    return;
+  }
+  const claimed = await db.document.updateMany({
+    where: { id, state: "QUARANTINED", nextScanAt: { lte: new Date() } },
+    data: {
+      scanAttempts: { increment: 1 },
+      nextScanAt: new Date(
+        Date.now() + Math.max(60000, 2 ** doc.scanAttempts * 60000),
+      ),
+    },
+  });
+  if (!claimed.count) return;
+  try {
+    const bytes = decrypt(
+      await readFile(storagePath(doc.storageKey), "utf8"),
+      "FILE_KEY",
+    );
+    if (hash(bytes) !== doc.hash) throw new Error("DOCUMENT_INTEGRITY_FAILED");
+    if (!(await validatePrivateBytes(bytes, doc.mime))) {
+      await transaction(async (tx) => {
+        await tx.document.updateMany({
+          where: { id, state: "QUARANTINED" },
+          data: {
+            state: "REJECTED",
+            scanResult: "FORMAT_REJECTED",
+            reason:
+              "File format or content validation failed. Submit a standard PDF, PNG or JPEG.",
+          },
+        });
+        await event(
+          tx,
+          "validator",
+          doc.propertyId,
+          "document.rejected",
+          id,
+          { reason: "FORMAT_REJECTED" },
+          doc.userId,
+        );
+      });
+      return;
+    }
+    const result = await scanBytes(bytes);
     await transaction(async (tx) => {
       await tx.document.updateMany({
         where: { id, state: "QUARANTINED" },
         data: {
-          state: "REJECTED",
-          scanResult: "FORMAT_REJECTED",
-          reason:
-            "File format or content validation failed. Submit a standard PDF, PNG or JPEG.",
+          state: result === "CLEAN" ? "CLEAN" : "REJECTED",
+          scanResult: result,
         },
       });
       await event(
         tx,
-        "validator",
+        "scanner",
         doc.propertyId,
-        "document.rejected",
+        "document.scanned",
         id,
-        { reason: "FORMAT_REJECTED" },
+        { result },
         doc.userId,
       );
     });
-    return;
-  }
-  const result = await scanBytes(bytes);
-  await transaction(async (tx) => {
-    await tx.document.updateMany({
+  } catch (error) {
+    await db.document.updateMany({
       where: { id, state: "QUARANTINED" },
       data: {
-        state: result === "CLEAN" ? "CLEAN" : "REJECTED",
-        scanResult: result,
+        state: doc.scanAttempts + 1 >= 5 ? "SCAN_FAILED" : "QUARANTINED",
+        scanResult: "SCANNER_UNAVAILABLE_OR_RESOURCE_LIMIT",
+        reason:
+          "Scanning could not complete. The file stays inaccessible; a reviewer can retry after the scanner or validation issue is resolved.",
       },
     });
-    await event(
-      tx,
-      "scanner",
-      doc.propertyId,
-      "document.scanned",
-      id,
-      { result },
-      doc.userId,
-    );
-  });
+    throw error;
+  }
 }
 export async function reviewDocument(
   actor: Actor,
@@ -265,18 +303,34 @@ export async function reviewDocument(
 }
 export async function download(actor: Actor, id: string) {
   const doc = await db.document.findUniqueOrThrow({ where: { id } });
-  if (doc.userId !== actor.id)
-    await permit(
-      actor,
-      doc.propertyId,
-      doc.kind === "MEDICAL"
-        ? "medical"
-        : doc.kind === "PAYMENT_PROOF"
-          ? "finance"
-          : doc.kind === "SIGNED_LEASE"
-            ? "leases"
-            : "kyc",
-    );
+  if (doc.userId !== actor.id) {
+    if (doc.kind === "SUPPORT") {
+      const ownTicket = await db.ticketMessage.findFirst({
+        where: {
+          documentId: doc.id,
+          ticket: { propertyId: doc.propertyId, userId: actor.id },
+        },
+      });
+      if (!ownTicket) {
+        const attached = await db.ticketMessage.findFirst({
+          where: { documentId: doc.id, ticket: { propertyId: doc.propertyId } },
+        });
+        if (!attached) throw new Error("FORBIDDEN");
+        await permit(actor, doc.propertyId, "operations");
+      }
+    } else
+      await permit(
+        actor,
+        doc.propertyId,
+        doc.kind === "MEDICAL"
+          ? "medical"
+          : doc.kind === "PAYMENT_PROOF"
+            ? "finance"
+            : doc.kind === "SIGNED_LEASE"
+              ? "leases"
+              : "kyc",
+      );
+  }
   if (!["CLEAN", "APPROVED"].includes(doc.state))
     throw new Error("DOCUMENT_QUARANTINED_OR_REJECTED");
   const bytes = decrypt(

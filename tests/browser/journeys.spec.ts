@@ -10,9 +10,12 @@ import {
   totp,
 } from "../../src/lib/security";
 import { randomUUID } from "node:crypto";
-const url = "postgresql://postgres@127.0.0.1:5432/legacy_test";
-if (process.env.DATABASE_URL !== url)
-  throw new Error("Browser tests require legacy_test");
+const url = new URL(process.env.DATABASE_URL || "postgresql://invalid/invalid");
+if (
+  url.pathname !== "/legacy_test" ||
+  !["localhost", "127.0.0.1"].includes(url.hostname)
+)
+  throw new Error("Browser tests require a loopback legacy_test database");
 async function browserFixture(staff = false) {
   const key = randomUUID(),
     password = "Browser fixture password 57!";
@@ -111,6 +114,11 @@ test("public catalogue, accessibility list, resident reservation and ticket pers
   await form.getByRole("button", { name: "Create request" }).click();
   await expect(page.getByText("Synthetic leaking tap")).toBeVisible();
   expect(await db.ticket.count({ where: { userId: f.user.id } })).toBe(1);
+  const statement = await page.request.get(
+    `/api/financial/statement/${f.property.id}`,
+  );
+  expect(statement.status()).toBe(200);
+  expect((await statement.body()).subarray(0, 5).toString()).toBe("%PDF-");
   const exported = await page.request.get("/api/v1/me-export");
   expect(exported.status()).toBe(200);
   const exportedData = await exported.json();

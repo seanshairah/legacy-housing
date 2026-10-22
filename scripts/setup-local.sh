@@ -20,7 +20,7 @@ for database in legacy_dev legacy_test; do
   if [ "$LH_EXISTS" != "1" ]; then docker exec "$LH_DB_CONTAINER" createdb -U postgres "$database"; fi
 done
 if ! docker inspect legacy-scanner >/dev/null 2>&1; then
-  docker run -d --name legacy-scanner -p 127.0.0.1:3310:3310 -e CLAMAV_NO_FRESHCLAMD=true clamav/clamav:stable@sha256:e19130cdebaeacc71fa46eab3ed6f69941f2f22aa5e08d55e9197f8edf43ce5e
+  docker run -d --health-cmd="clamdscan --ping 1" --health-interval=15s --health-timeout=10s --health-retries=20 --name legacy-scanner -p 127.0.0.1:3310:3310 -e CLAMAV_NO_FRESHCLAMD=true clamav/clamav:stable@sha256:e19130cdebaeacc71fa46eab3ed6f69941f2f22aa5e08d55e9197f8edf43ce5e
 else docker start legacy-scanner >/dev/null; fi
 npm run db:deploy
 DATABASE_URL=postgresql://postgres@127.0.0.1:5432/legacy_test npm run db:deploy

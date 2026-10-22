@@ -153,18 +153,30 @@ export async function session(raw?: string) {
   return s && s.expiresAt > new Date() && s.user.active ? s.user : null;
 }
 export async function enrollMfa(email: string, password: string) {
+  email = z.string().email().parse(email).toLowerCase();
+  password = z.string().min(1).max(128).parse(password);
   await rateLimit(`mfa-enroll:${email}`, 5);
-  const u = await db.user.findUnique({ where: { email: email.toLowerCase() } });
-  if (
-    !u ||
-    u.mfaConfirmed ||
-    !(await passwordMatches(password, u.passwordHash))
-  )
+  const u = await db.user.findUnique({ where: { email } }),
+    valid = await passwordMatches(password, u?.passwordHash || "");
+  if (!u || !u.active || u.mfaConfirmed || !valid)
     throw new Error("ENROLLMENT_DENIED");
-  const secret = newTotpSecret();
-  await db.user.update({
-    where: { id: u.id },
-    data: { mfaSecret: encrypt(secret) },
+  const secret = newTotpSecret(),
+    encrypted = encrypt(secret);
+  await transaction(async (tx) => {
+    const changed = await tx.user.updateMany({
+      where: { id: u.id, mfaConfirmed: false },
+      data: { mfaSecret: encrypted },
+    });
+    if (changed.count !== 1) throw new Error("MFA_SETUP_CHANGED_REPEAT");
+    await event(
+      tx,
+      u.id,
+      null,
+      "identity.mfa_enrollment_started",
+      u.id,
+      {},
+      u.id,
+    );
   });
   return { secret, email: u.email };
 }
@@ -173,15 +185,27 @@ export async function confirmMfa(
   password: string,
   code: string,
 ) {
+  email = z.string().email().parse(email).toLowerCase();
+  password = z.string().min(1).max(128).parse(password);
   await rateLimit(`mfa-confirm:${email}`, 5);
-  const u = await db.user.findUnique({ where: { email: email.toLowerCase() } });
+  const u = await db.user.findUnique({ where: { email } }),
+    valid = await passwordMatches(password, u?.passwordHash || "");
   if (
     !u ||
+    !u.active ||
     !u.mfaSecret ||
     u.mfaConfirmed ||
-    !(await passwordMatches(password, u.passwordHash)) ||
+    !valid ||
     !verifyTotp(decrypt(u.mfaSecret).toString(), code)
   )
     throw new Error("MFA_VERIFICATION_FAILED");
-  await db.user.update({ where: { id: u.id }, data: { mfaConfirmed: true } });
+  await transaction(async (tx) => {
+    const changed = await tx.user.updateMany({
+      where: { id: u.id, mfaConfirmed: false, mfaSecret: u.mfaSecret },
+      data: { mfaConfirmed: true },
+    });
+    if (changed.count !== 1) throw new Error("MFA_SETUP_CHANGED_REPEAT");
+    await tx.session.deleteMany({ where: { userId: u.id } });
+    await event(tx, u.id, null, "identity.mfa_enabled", u.id, {}, u.id);
+  });
 }

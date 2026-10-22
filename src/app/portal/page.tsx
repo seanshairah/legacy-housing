@@ -65,6 +65,18 @@ export default async function Portal({
         },
       }),
     ]);
+  const tenancyBeds = await db.bed.findMany({
+    where: {
+      blocked: false,
+      room: {
+        floor: {
+          building: { propertyId: { in: leases.map((l) => l.propertyId) } },
+        },
+      },
+    },
+    include: { room: { include: { floor: { include: { building: true } } } } },
+    orderBy: { label: "asc" },
+  });
   const privacyRequests = await db.privacyRequest.findMany({
     where: { userId: u.id },
     orderBy: { createdAt: "desc" },
@@ -336,6 +348,14 @@ export default async function Portal({
           <section id="account" className="panel">
             <div className="panel-head">
               <h2>Your account</h2>
+              {active && (
+                <a
+                  className="text-link"
+                  href={`/api/financial/statement/${active.propertyId}`}
+                >
+                  Download statement PDF ↗
+                </a>
+              )}
               <Badge>Transparent, verified payments</Badge>
             </div>
             {active &&
@@ -651,12 +671,25 @@ export default async function Portal({
                         </select>
                       </label>
                       <label>
-                        Target bed ID
-                        <input
+                        Preferred room & space
+                        <select
                           name="targetBedId"
                           defaultValue={l.reservation.bedId}
                           required
-                        />
+                        >
+                          {tenancyBeds
+                            .filter(
+                              (b) =>
+                                b.room.floor.building.propertyId ===
+                                l.propertyId,
+                            )
+                            .map((b) => (
+                              <option key={b.id} value={b.id}>
+                                Room {b.room.name} / {b.label} ·{" "}
+                                {b.room.floor.name}
+                              </option>
+                            ))}
+                        </select>
                       </label>
                       <label>
                         New start date
@@ -757,6 +790,15 @@ export default async function Portal({
                 {t.messages.map((m) => (
                   <p className="ticket-message" key={m.id}>
                     {m.body}
+                    {m.documentId && (
+                      <a
+                        className="text-link"
+                        href={`/api/documents/${m.documentId}`}
+                      >
+                        {" "}
+                        Download attachment ↗
+                      </a>
+                    )}
                     <small>{m.createdAt.toLocaleString("en-ZA")}</small>
                   </p>
                 ))}
@@ -765,6 +807,24 @@ export default async function Portal({
                   <label>
                     Reply or reopen
                     <textarea name="body" required minLength={2} />
+                  </label>
+                  <label>
+                    Optional scanned attachment
+                    <select name="documentId">
+                      <option value="">No attachment</option>
+                      {documents
+                        .filter(
+                          (d) =>
+                            d.kind === "SUPPORT" &&
+                            d.propertyId === t.propertyId &&
+                            ["CLEAN", "APPROVED"].includes(d.state),
+                        )
+                        .map((d) => (
+                          <option key={d.id} value={d.id}>
+                            {d.filename}
+                          </option>
+                        ))}
+                    </select>
                   </label>
                   <button className="button secondary">Send reply</button>
                 </ActionForm>

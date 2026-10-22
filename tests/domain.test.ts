@@ -570,6 +570,23 @@ describe("private KYC, lease evidence and support journeys", () => {
         body: "Forged crossing attempt",
       }),
     ).rejects.toThrow("FORBIDDEN");
+    const attachment = await upload(f.caretaker, {
+      propertyId: f.property.id,
+      kind: "SUPPORT",
+      filename: "staff-response.pdf",
+      bytes: await pdf(),
+    });
+    await scanDocument(attachment.id);
+    await expect(download(f.resident, attachment.id)).rejects.toThrow(
+      "FORBIDDEN",
+    );
+    await updateTicket(f.caretaker, ticket.id, {
+      status: "RESOLVED",
+      body: "Scanned resolution evidence",
+      documentId: attachment.id,
+    });
+    await download(f.resident, attachment.id);
+    await expect(download(f.other, attachment.id)).rejects.toThrow("FORBIDDEN");
     await checkOut(
       f.admin,
       l.id,
@@ -1093,4 +1110,117 @@ describe("zero-deposit admission and reusable verified credit", () => {
     expect(balance.credit).toBe(100n);
     expect(await db.receipt.count({ where: { paymentId: p.id } })).toBe(1);
   });
+});
+
+it("audits authenticator activation and revokes sessions created before MFA", async () => {
+  const { enrollMfa, confirmMfa } = await import("../src/domain/identity"),
+    { totp } = await import("../src/lib/security");
+  const f = await fixture(),
+    password = "Authenticator activation test 49!";
+  await db.user.update({
+    where: { id: f.resident.id },
+    data: { passwordHash: await passwordHash(password) },
+  });
+  const previous = await login(f.resident.email, password);
+  const setup = await enrollMfa(f.resident.email.toUpperCase(), password);
+  await confirmMfa(f.resident.email, password, totp(setup.secret).generate());
+  expect(await session(previous)).toBeNull();
+  await expect(login(f.resident.email, password)).rejects.toThrow(
+    "MFA_CODE_REQUIRED",
+  );
+  expect(
+    await db.auditEvent.count({
+      where: { actorId: f.resident.id, action: "identity.mfa_enabled" },
+    }),
+  ).toBe(1);
+});
+
+it("fails closed and dead-letters exhausted scans instead of starving the queue", async () => {
+  const { vi } = await import("vitest"),
+    { command } = await import("../src/domain/commands");
+  const f = await fixture();
+  await reserve(f.resident, hold(f.room.beds[0].id));
+  const d = await upload(f.resident, {
+    propertyId: f.property.id,
+    kind: "IDENTITY",
+    filename: "retry.pdf",
+    bytes: await pdf(),
+  });
+  await db.document.update({ where: { id: d.id }, data: { scanAttempts: 4 } });
+  vi.stubEnv("CLAMAV_PORT", "1");
+  try {
+    await expect(scanDocument(d.id)).rejects.toThrow();
+    expect(
+      (await db.document.findUniqueOrThrow({ where: { id: d.id } })).state,
+    ).toBe("SCAN_FAILED");
+    await expect(download(f.resident, d.id)).rejects.toThrow("QUARANTINED");
+    await expect(
+      command(f.other, "document.retry", { id: d.id, reason: "Forged retry" }),
+    ).rejects.toThrow("FORBIDDEN");
+    await command(f.kyc, "document.retry", {
+      id: d.id,
+      reason: "Scanner restored and resource issue reviewed",
+    });
+    expect(
+      (await db.document.findUniqueOrThrow({ where: { id: d.id } }))
+        .scanAttempts,
+    ).toBe(0);
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
+
+it("quotes exactly the sum of independently rounded calendar-month invoices", async () => {
+  const { quoteRates, quoteSlice } = await import("../src/domain/pricing");
+  const snapshot = quoteRates(
+    {
+      roomId: "round-room",
+      bedId: "round-bed",
+      baseMinor: 10001n,
+      currency: "USD",
+      startAt: new Date("2027-01-17"),
+      endAt: new Date("2027-03-18"),
+    },
+    [],
+  );
+  const total =
+    quoteSlice(snapshot, new Date("2027-01-17"), new Date("2027-02-01")) +
+    quoteSlice(snapshot, new Date("2027-02-01"), new Date("2027-03-01")) +
+    quoteSlice(snapshot, new Date("2027-03-01"), new Date("2027-03-18"));
+  expect(BigInt(snapshot.totalMinor)).toBe(total);
+});
+
+it("requires staff and independent approval for cash while retaining excess funds", async () => {
+  const f = await fixture();
+  await reserve(f.resident, hold(f.room.beds[0].id));
+  await issueCharge(f.finance, {
+    userId: f.resident.id,
+    propertyId: f.property.id,
+    reference: `INV-${randomUUID()}`,
+    category: "RENT",
+    description: "Cash tender test",
+    amount: "10.00",
+    dueAt: new Date(),
+  });
+  const data = {
+    propertyId: f.property.id,
+    userId: f.resident.id,
+    amount: "15.00",
+    method: "CASH",
+    bankReference: `CASH-${randomUUID()}`,
+    idempotencyKey: randomUUID(),
+  };
+  await expect(proposePayment(f.resident, data)).rejects.toThrow("FORBIDDEN");
+  const p = await proposePayment(f.finance, data);
+  expect(p.status).toBe("PROOF_REVIEW");
+  await expect(
+    reviewProof(f.finance, p.id, "APPROVE", "Counted own proposal"),
+  ).rejects.toThrow("MAKER_CHECKER");
+  await reviewProof(
+    f.admin,
+    p.id,
+    "APPROVE",
+    "Synthetic voucher independently counted",
+  );
+  expect((await account(f.resident.id, f.property.id)).credit).toBe(500n);
 });

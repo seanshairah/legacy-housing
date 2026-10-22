@@ -10,7 +10,7 @@ const patterns = [
 ];
 let failures = 0;
 for (const name of names) {
-  if (/\.(png|jpg|pdf|zip|ico)$/.test(name)) continue;
+  if (/\.(png|jpg|pdf|zip|ico|ttf)$/.test(name)) continue;
   const text = readFileSync(name, "utf8");
   if (patterns.some((p) => p.test(text))) {
     console.error(
