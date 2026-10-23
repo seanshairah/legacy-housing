@@ -1,3 +1,4 @@
+import { securitySignal } from "../../../lib/security-monitor";
 import { NextResponse } from "next/server";
 import { currentUser } from "../../../lib/current-user";
 import { assertSameOrigin } from "../../../lib/security";
@@ -15,7 +16,9 @@ export async function POST(request: Request) {
       await issueApiKey(u, String(d.propertyId), String(d.name), d.scopes),
       { headers: { "Cache-Control": "no-store" } },
     );
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.message === "CSRF_ORIGIN_REJECTED")
+      await securitySignal({ kind: "CSRF_REJECTED", subject: "api-keys" });
     return NextResponse.json({ error: "KEY_CREATION_DENIED" }, { status: 403 });
   }
 }

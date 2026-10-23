@@ -1,3 +1,5 @@
+import { hash } from "../../lib/security";
+import { LiveRefresh } from "../../components/live-refresh";
 import { quoteRates } from "../../domain/pricing";
 import Link from "next/link";
 import {
@@ -34,6 +36,11 @@ export default async function Rooms({
   const properties = await db.property.findMany({
     where: { published: true },
     include: {
+      templates: {
+        where: { approvedAt: { not: null } },
+        orderBy: { version: "desc" },
+        take: 1,
+      },
       buildings: {
         include: {
           floors: {
@@ -77,6 +84,7 @@ export default async function Rooms({
   return (
     <>
       <PublicNav />
+      <LiveRefresh />
       <main id="main" className="catalogue section">
         <PageHead
           eyebrow="A PLACE FOR YOUR NEXT CHAPTER"
@@ -154,6 +162,20 @@ export default async function Rooms({
               </div>
               <Badge tone="green">{selected.currency} · per month</Badge>
             </div>
+            {selected.templates[0] && (
+              <details className="panel">
+                <summary>
+                  Tenancy conditions · version {selected.templates[0].version}
+                </summary>
+                <p style={{ whiteSpace: "pre-wrap" }}>
+                  {selected.templates[0].body}
+                </p>
+                <p className="small muted">
+                  Review these conditions before applying. Your issued agreement
+                  will also identify your dates, rate and space.
+                </p>
+              </details>
+            )}
             {selected.buildings.map((b) => (
               <div key={b.id}>
                 {b.floors.map((f) => (
@@ -260,6 +282,11 @@ export default async function Rooms({
                                           action="reserve"
                                           next="/portal"
                                           bedId={bed.id}
+                                          tenancyTermsHash={
+                                            selected.templates[0]
+                                              ? hash(selected.templates[0].body)
+                                              : ""
+                                          }
                                           expectedPriceMinor={quote.totalMinor}
                                           startAt={start.toISOString()}
                                           endAt={end.toISOString()}
@@ -275,6 +302,8 @@ export default async function Rooms({
                                               <Link href="/privacy">
                                                 application policy
                                               </Link>
+                                              {selected.templates[0] &&
+                                                " and the displayed tenancy conditions"}
                                             </span>
                                           </label>
                                           <button className="text-button">

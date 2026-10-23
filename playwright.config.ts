@@ -17,7 +17,10 @@ export default defineConfig({
     screenshot: "only-on-failure",
   },
   webServer: {
-    command: "npm run dev -- --port 3002",
+    command:
+      process.env.LEGACY_E2E_PRODUCTION === "true"
+        ? "npm run start -- --port 3002"
+        : "npm run dev -- --port 3002",
     url: "http://localhost:3002/api/health",
     reuseExistingServer: false,
     env: {

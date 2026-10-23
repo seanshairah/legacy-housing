@@ -1,3 +1,4 @@
+import { securitySignal } from "../lib/security-monitor";
 import { z } from "zod";
 import { db, transaction } from "../lib/db";
 import {
@@ -30,7 +31,10 @@ export async function rateLimit(key: string, limit = 8) {
   const rows = await db.$queryRaw<
     { count: number }[]
   >`INSERT INTO "RateLimit" (key,count,"resetAt") VALUES (${key},1,NOW()+interval '15 minutes') ON CONFLICT (key) DO UPDATE SET count=CASE WHEN "RateLimit"."resetAt"<NOW() THEN 1 ELSE "RateLimit".count+1 END,"resetAt"=CASE WHEN "RateLimit"."resetAt"<NOW() THEN NOW()+interval '15 minutes' ELSE "RateLimit"."resetAt" END RETURNING count`;
-  if (rows[0].count > limit) throw new Error("RATE_LIMITED");
+  if (rows[0].count > limit) {
+    await securitySignal({ kind: "RATE_LIMIT", subject: key });
+    throw new Error("RATE_LIMITED");
+  }
 }
 export async function issueChallenge(
   userId: string,
@@ -54,20 +58,42 @@ export async function issueChallenge(
         payload: { encrypted: encrypt(raw) },
       },
     });
+    await event(tx, userId, null, "identity.challenge_issued", userId, {
+      kind,
+    });
   });
 }
 export async function register(input: unknown) {
   const data = registrationSchema.parse(input);
   await rateLimit(`register:${data.email}`, 4);
   const { password, ...fields } = data;
-  const user = await db.user.create({
-    data: { ...fields, passwordHash: await passwordHash(password) },
+  const digest = await passwordHash(password);
+  return transaction(async (tx) => {
+    const user = await tx.user.create({
+      data: { ...fields, passwordHash: digest },
+    });
+    for (const kind of ["EMAIL", "PHONE"] as const) {
+      const raw = token();
+      await tx.challenge.create({
+        data: {
+          userId: user.id,
+          kind,
+          tokenHash: hash(raw),
+          expiresAt: new Date(Date.now() + 20 * 60000),
+        },
+      });
+      await tx.outboxEvent.create({
+        data: {
+          type: `identity.${kind.toLowerCase()}`,
+          userId: user.id,
+          traceId: token(),
+          payload: { encrypted: encrypt(raw) },
+        },
+      });
+    }
+    await event(tx, user.id, null, "identity.registered", user.id);
+    return user.id;
   });
-  await Promise.all([
-    issueChallenge(user.id, "EMAIL"),
-    issueChallenge(user.id, "PHONE"),
-  ]);
-  return user.id;
 }
 export async function consumeChallenge(raw: string, newPassword?: string) {
   if (!raw || raw.length > 100) throw new Error("INVALID_OR_EXPIRED_TOKEN");
@@ -118,12 +144,17 @@ export async function login(email: string, password: string, code?: string) {
     include: { memberships: true },
   });
   const valid = await passwordMatches(password, u?.passwordHash || "");
-  if (!u || !u.active || !valid) throw new Error("INVALID_CREDENTIALS");
+  if (!u || !u.active || !valid) {
+    await securitySignal({ kind: "AUTH_FAILURE", subject: email });
+    throw new Error("INVALID_CREDENTIALS");
+  }
   if (
     u.mfaConfirmed &&
     (!code || !verifyTotp(decrypt(u.mfaSecret!).toString(), code))
-  )
+  ) {
+    await securitySignal({ kind: "AUTH_FAILURE", subject: email });
     throw new Error("MFA_CODE_REQUIRED");
+  }
   if (u.memberships.length && !u.mfaConfirmed)
     throw new Error("STAFF_MFA_ENROLLMENT_REQUIRED");
   if (!u.passwordHash.startsWith("scrypt$131072$8$1$"))

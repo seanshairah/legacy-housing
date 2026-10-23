@@ -243,7 +243,13 @@ test("public and authenticated pages have no automated WCAG A/AA violations", as
     );
   }
   await authenticate(page, f);
-  for (const path of ["/portal", "/workspace/overview"]) {
+  for (const path of [
+    "/portal",
+    "/workspace/overview",
+    "/workspace/reports",
+    "/workspace/finance",
+    "/workspace/security",
+  ]) {
     await page.goto(path);
     const results = await new AxeBuilder({ page })
       .withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"])
@@ -257,4 +263,218 @@ test("public and authenticated pages have no automated WCAG A/AA violations", as
     );
   }
   expect(violations).toEqual([]);
+});
+
+test("resident reads, electronically signs and downloads the exact scanned agreement", async ({
+  page,
+}) => {
+  const f = await browserFixture();
+  f.secret = newTotpSecret();
+  await db.user.update({
+    where: { id: f.user.id },
+    data: { mfaSecret: encrypt(f.secret), mfaConfirmed: true },
+  });
+  const manager = await browserFixture(true);
+  await db.membership.create({
+    data: { userId: manager.user.id, propertyId: f.property.id, role: "ADMIN" },
+  });
+  const { reserve } = await import("../../src/domain/inventory"),
+    { issueLease, executeLease } = await import("../../src/domain/leases");
+  const a = await reserve(f.user, {
+    bedId: f.room.beds[0].id,
+    startAt: new Date(),
+    endAt: new Date(Date.now() + 90 * 86400000),
+    consent: true,
+    termsVersion: "application-policy-v1",
+  });
+  await db.reservation.update({
+    where: { id: a.reservation.id },
+    data: { state: "CONFIRMED", expiresAt: null },
+  });
+  await db.application.update({
+    where: { id: a.application.id },
+    data: { status: "LEASE_SIGNING_PENDING" },
+  });
+  const body =
+    "SYNTHETIC BROWSER TEST ONLY. This is a test agreement for an authenticator-backed signing journey, not a real tenancy.";
+  const template = await db.leaseTemplate.create({
+    data: {
+      propertyId: f.property.id,
+      version: 1,
+      title: "Browser signing test",
+      body,
+      hash: hash(body),
+      approvedAt: new Date(),
+      approvedBy: manager.user.id,
+      signingDisclosure:
+        "TEST ONLY. I intend to electronically sign this exact synthetic agreement with my typed name and authenticator verification, subject to staff execution review.",
+    },
+  });
+  const lease = await issueLease(manager.user, a.application.id, template.id);
+  await authenticate(page, f);
+  await page.getByText("Read agreement online", { exact: true }).click();
+  await expect(page.getByText(body, { exact: false }).first()).toBeVisible();
+  await page
+    .getByRole("button", { name: "Review for electronic signing" })
+    .click();
+  if (process.env.LEGACY_CAPTURE_SCREENSHOTS === "true")
+    await page.screenshot({
+      path: "docs/USER_GUIDES/screenshots/electronic-lease-signing.png",
+      fullPage: true,
+      caret: "initial",
+    });
+  const signingAxe = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"])
+    .analyze();
+  expect(
+    signingAxe.violations.map((v) => ({
+      id: v.id,
+      nodes: v.nodes.map((n) => n.target),
+    })),
+  ).toEqual([]);
+  await page
+    .getByLabel("Full name as shown on the agreement")
+    .fill(f.user.name);
+  await page
+    .getByLabel("Current authenticator code")
+    .fill(totp(f.secret).generate());
+  await page
+    .getByLabel("I have reviewed this exact agreement", { exact: false })
+    .check();
+  await page
+    .getByRole("button", { name: "Sign agreement electronically", exact: true })
+    .click();
+  await expect
+    .poll(
+      async () =>
+        (await db.lease.findUniqueOrThrow({ where: { id: lease.id } })).status,
+    )
+    .toBe("REVIEW");
+  const link = page.getByRole("link", { name: "Download signed lease copy" });
+  await expect(link).toBeVisible();
+  const result = await page.request.get((await link.getAttribute("href"))!);
+  expect(result.status()).toBe(200);
+  expect(hash(await result.body())).toBe(
+    (await db.lease.findUniqueOrThrow({ where: { id: lease.id } })).signedHash,
+  );
+  await executeLease(
+    manager.user,
+    lease.id,
+    "Browser fixture: independently reviewed exact signature evidence",
+  );
+  await page.reload();
+  await expect(
+    page.locator(".lease-card").getByText("executed", { exact: true }),
+  ).toBeVisible();
+});
+
+test("staff sees source-record collection reports and completes a scoped security investigation", async ({
+  page,
+}) => {
+  const f = await browserFixture(true);
+  const { reserve } = await import("../../src/domain/inventory"),
+    { issueCharge } = await import("../../src/domain/finance"),
+    { securitySignal } = await import("../../src/lib/security-monitor");
+  await reserve(f.user, {
+    bedId: f.room.beds[0].id,
+    startAt: new Date(),
+    endAt: new Date(Date.now() + 90 * 86400000),
+    consent: true,
+    termsVersion: "application-policy-v1",
+  });
+  await issueCharge(f.user, {
+    userId: f.user.id,
+    propertyId: f.property.id,
+    reference: `browser-rent-${randomUUID()}`,
+    category: "RENT",
+    description: "Synthetic outstanding rent",
+    amount: "100.00",
+    dueAt: new Date(Date.now() - 86400000),
+  });
+  for (let i = 0; i < 5; i++)
+    await securitySignal({
+      kind: "ACCESS_DENIED",
+      subject: `browser-${f.user.id}`,
+      propertyId: f.property.id,
+    });
+  await authenticate(page, f);
+  await page.goto(`/workspace/reports?property=${f.property.id}`);
+  await expect(
+    page.getByRole("heading", {
+      name: "Collections, debtors & reconciliation",
+    }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Overdue rental debt", { exact: true }),
+  ).toBeVisible();
+  const report = await page.request.get(
+    (await page
+      .getByRole("link", { name: "Download reconciliation CSV" })
+      .getAttribute("href"))!,
+  );
+  expect(report.status()).toBe(200);
+  expect(await report.text()).toContain('"received_minor"');
+  await page.goto(`/workspace/security?property=${f.property.id}`);
+  const card = page
+    .locator(".record-card")
+    .filter({ has: page.getByText("ACCESS DENIED", { exact: true }) })
+    .first();
+  await expect(card).toContainText("HIGH");
+  if (process.env.LEGACY_CAPTURE_SCREENSHOTS === "true")
+    await page.screenshot({
+      path: "docs/USER_GUIDES/screenshots/security-monitoring.png",
+      fullPage: true,
+      caret: "initial",
+    });
+  await card.getByLabel("Review status").selectOption("RESOLVED");
+  await card
+    .getByLabel("Investigation / resolution")
+    .fill("Synthetic browser investigation completed; access remains denied.");
+  await card.getByRole("button", { name: "Record security review" }).click();
+  await expect(
+    page.getByText(
+      "Synthetic browser investigation completed; access remains denied.",
+    ),
+  ).toBeVisible();
+});
+
+test("staff capabilities remain specific to the selected property across mixed roles", async ({
+  page,
+}) => {
+  const f = await browserFixture(true),
+    finance = await browserFixture(),
+    audit = await browserFixture();
+  await db.membership.updateMany({
+    where: { userId: f.user.id, propertyId: f.property.id },
+    data: { role: "PROPERTY_MANAGER" },
+  });
+  await db.property.update({
+    where: { id: finance.property.id },
+    data: { name: "Restricted finance-only property" },
+  });
+  await db.membership.createMany({
+    data: [
+      { userId: f.user.id, propertyId: finance.property.id, role: "FINANCE" },
+      { userId: f.user.id, propertyId: audit.property.id, role: "AUDITOR" },
+    ],
+  });
+  await authenticate(page, f);
+  await page.goto(`/workspace/overview?property=${finance.property.id}`);
+  await expect(page.locator("main")).not.toContainText(
+    "Restricted finance-only property",
+  );
+  await page.goto(`/workspace/overview?property=${f.property.id}`);
+  await expect(page.getByRole("table")).toHaveCount(0);
+  await page.goto(`/workspace/finance?property=${audit.property.id}`);
+  await expect(
+    page.getByRole("heading", { name: "Resident accounts" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", {
+      name: "Record received cash for independent verification",
+    }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("heading", { name: "Issue invoice / charge" }),
+  ).toHaveCount(0);
 });

@@ -322,6 +322,7 @@ model LeaseTemplate {
   title String
   body String
   hash String
+  signingDisclosure String?
   approvedAt DateTime?
   approvedBy String?
   property Property @relation(fields:[propertyId],references:[id],onDelete:Restrict)
@@ -350,6 +351,7 @@ model Lease {
   reservation Reservation @relation(fields:[reservationId],references:[id],onDelete:Restrict)
   template LeaseTemplate @relation(fields:[templateId],references:[id],onDelete:Restrict)
   events LeaseEvent[]
+  signingChallenges LeaseSigningChallenge[]
 }
 model LeaseEvent {
   id String @id @default(cuid())
@@ -512,4 +514,33 @@ model RatePlan {
   monthlyMinor BigInt
   priority Int @default(0)
   createdAt DateTime @default(now())
+}
+
+model LeaseSigningChallenge {
+  id String @id @default(cuid())
+  leaseId String
+  userId String
+  tokenHash String @unique
+  documentHash String
+  expiresAt DateTime
+  consumedAt DateTime?
+  totpStep BigInt?
+  lease Lease @relation(fields:[leaseId],references:[id],onDelete:Restrict)
+  @@unique([userId,totpStep])
+}
+model SecurityAlert {
+  id String @id @default(cuid())
+  dedupeKey String @unique
+  propertyId String?
+  kind String
+  subjectHash String
+  severity String
+  occurrences Int @default(1)
+  state String @default("OPEN")
+  firstSeenAt DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+  reviewedBy String?
+  reviewedAt DateTime?
+  resolution String?
+  @@index([propertyId,state,lastSeenAt])
 }

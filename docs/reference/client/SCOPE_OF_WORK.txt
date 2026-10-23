@@ -1,0 +1,191 @@
+Scope of Works
+Development of a Secure Tenant Portal and Accommodation Management Website for Legacy Heights Student Accommodation
+1. Project Overview
+The objective of this project is to develop a secure, web-based accommodation management platform for Legacy Heights Student Accommodation that enables prospective and existing students to conveniently apply for accommodation, select available rooms, submit documentation, make payments, sign lease agreements, and communicate with management online.
+The platform shall be accessible via desktop, tablet, and mobile devices and shall comply with current cybersecurity and data protection standards.
+2. Functional Requirements
+A. Student Registration and User Management
+The system shall provide:
+Secure student account registration.
+Email and mobile number verification.
+Password reset and account recovery functionality.
+Multi-factor authentication (MFA) capability.
+Role-based user access including:
+Students
+Accommodation Administration
+Finance Team
+Property Management Team
+System Administrator
+B. Room Selection and Booking Module
+The platform shall provide:
+Interactive display of available rooms.
+Floor-by-floor room allocation view.
+Room categorisation by:
+Single room
+Shared room
+Premium room
+Accessible room (if applicable)
+Real-time occupancy status.
+Room pricing display.
+Online room reservation functionality.
+Automated holding period during payment processing.
+Waiting list functionality for fully occupied rooms.
+C. Online Lease Application
+The platform shall enable students to:
+Complete accommodation application forms online.
+Submit application details electronically.
+Review tenancy conditions.
+Accept terms and conditions.
+Track application status.
+D. KYC and Document Management
+The website shall include a secure document upload facility allowing students to upload:
+Mandatory KYC Documents
+National ID / Passport
+Student Registration Letter
+Proof of Residence (where applicable)
+Emergency Contact Information
+Additional Documents
+Sponsorship letters
+Medical declaration forms
+Other supporting documentation
+Requirements:
+Secure encrypted document storage.
+File type validation.
+Virus scanning of uploads.
+Document version control.
+Administrative approval workflow.
+E. Online Payment Integration
+The system shall integrate with Paynow Zimbabwe and support:
+Accommodation deposits.
+Rental payments.
+Utility payments (if applicable).
+Penalty charges and miscellaneous invoices.
+Payment features shall include:
+Secure Paynow integration.
+Instant payment confirmation.
+Automated receipt generation.
+Downloadable payment receipts.
+Transaction history.
+Failed payment notifications.
+Payment status tracking.
+F. Proof of Payment Submission Module
+The system shall enable students to:
+Upload proof of payment after completing transactions.
+Submit supporting payment references.
+Track payment verification status.
+Administrative users shall be able to:
+Review proofs of payment.
+Approve or reject submitted payments.
+Generate payment reconciliation reports.
+G. Digital Lease Execution
+The platform shall provide a facility for:
+Generation of lease agreements.
+Electronic signing of lease documents.
+Uploading of manually signed leases.
+Secure storage of executed agreements.
+Lease renewal requests.
+Lease expiry notifications.
+Students shall be able to:
+View lease agreements online.
+Download signed lease copies.
+Track lease status.
+H. Student Feedback and Service Requests Portal
+The system shall provide a feedback management platform enabling students to:
+Submit compliments.
+Log complaints.
+Report maintenance issues.
+Request support services.
+Features shall include:
+Ticket generation.
+Case tracking.
+Response management.
+Escalation workflow.
+Automated notifications.
+Management shall be able to:
+Monitor response times.
+Generate service-performance reports.
+Track recurring issues.
+I. Student Dashboard
+Each student shall have access to a personalised dashboard showing:
+Room information.
+Lease status.
+Outstanding balances.
+Payment history.
+Submitted documents.
+Maintenance requests.
+Announcements and notices.
+Feedback status.
+J. Administration Portal
+The administration portal shall provide:
+Occupancy Management
+Room allocations.
+Vacancies.
+Check-in and check-out management.
+Lease Management
+Lease approvals.
+Lease renewals.
+Lease expiry tracking.
+Financial Management
+Invoicing.
+Payment tracking.
+Outstanding debtors.
+Reporting
+Occupancy reports.
+Revenue reports.
+Lease reports.
+Maintenance reports.
+Student feedback reports.
+3. Security Requirements
+The platform shall include:
+SSL encryption for all website traffic.
+Multi-factor authentication.
+Role-based access controls.
+Secure password policies.
+Encrypted document storage.
+Anti-malware protection.
+Intrusion detection and monitoring.
+Regular security auditing.
+Daily automated backups.
+Disaster recovery capability.
+Audit trail for all user activities.
+4. Notifications and Communication
+The system shall provide automated notifications through:
+Email
+SMS (optional)/Whatsapp
+In-system alerts
+Notifications shall include:
+Application updates.
+Payment confirmations.
+Lease approval notices.
+Lease expiry reminders.
+Maintenance ticket updates.
+Feedback response notifications.
+5. System Integration Requirements
+The website should be capable of integrating with:
+Paynow Payment Gateway.
+Accounting/ERP systems.
+Student Information Systems.
+Property Management Systems.
+Email and SMS gateways.
+6. Reporting and Analytics
+Management dashboards shall include:
+Occupancy levels.
+Room utilisation.
+Revenue collection.
+Outstanding rentals.
+Lease renewal rates.
+Student complaint trends.
+Maintenance response times.
+Payment collection performance.
+7. Deliverables
+The successful developer shall provide:
+Fully functional secure website.
+Tenant and student portal.
+Administrative management portal.
+Paynow payment integration.
+Digital lease management module.
+KYC/document management module.
+Feedback and maintenance ticketing system.
+User manuals and training.
+Source code and documentation.
+Post-implementation support and maintenance.

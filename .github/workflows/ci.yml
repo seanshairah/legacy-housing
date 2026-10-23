@@ -2,10 +2,14 @@ name: Legacy platform checks
 on:
   push:
   pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 4 * * 1"
 permissions:
   contents: read
 jobs:
   verify:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -49,7 +53,7 @@ jobs:
       - run: npm test
       - run: npm run build
       - name: Browser and accessibility journeys
-        run: npx playwright install --with-deps chromium && CHROMIUM_PATH="$(find "$HOME/.cache/ms-playwright" -name chrome -type f | head -1)" npm run test:e2e
+        run: npx playwright install --with-deps chromium && LEGACY_E2E_PRODUCTION=true CHROMIUM_PATH="$(find "$HOME/.cache/ms-playwright" -name chrome -type f | head -1)" npm run test:e2e
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
@@ -65,4 +69,7 @@ jobs:
         with: { python-version: "3.12" }
       - run: pip install semgrep==1.182.1
       - run: semgrep scan --config .semgrep.yaml --error --metrics off src
+      - uses: actions/setup-node@v4
+        with: { node-version: "24" }
+      - run: npm audit --audit-level=high
       - run: node scripts/check-secrets.mjs

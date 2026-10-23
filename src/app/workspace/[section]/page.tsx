@@ -1,3 +1,6 @@
+import { FinancialReport } from "../../../components/financial-report";
+import { SecurityPanel } from "../../../components/security-panel";
+import { activity } from "../../../lib/activity";
 import { PrivacyAdmin } from "../../../components/privacy-admin";
 import { ReportPanel } from "../../../components/report-panel";
 import { ApiKeyForm } from "../../../components/api-key-form";
@@ -46,11 +49,7 @@ export default async function Workspace({
   if (section !== "overview" && (!item || !capabilities.has(item.cap)))
     redirect(`/workspace/${menu[0]?.key || "overview"}`);
   const permittedProperties = u.memberships
-    .filter(
-      (m) =>
-        section === "overview" ||
-        rolePermissions[m.role]?.includes(item?.cap || "reports"),
-    )
+    .filter((m) => rolePermissions[m.role]?.includes(item?.cap || "reports"))
     .map((m) => m.propertyId);
   const properties = await db.property.findMany({
       where: { id: { in: permittedProperties } },
@@ -63,6 +62,12 @@ export default async function Workspace({
     needle = (q.search || "").slice(0, 80),
     page = Math.max(1, Math.min(10000, parseInt(q.page || "1") || 1)),
     skip = (page - 1) * 20;
+  await activity(u.id, p, "workspace.viewed", section);
+  const hasPropertyCapability = (capability: string) =>
+    u.memberships.some(
+      (m) =>
+        m.propertyId === p && rolePermissions[m.role]?.includes(capability),
+    );
   const supportFiles =
     section === "operations"
       ? await db.document.findMany({
@@ -344,7 +349,7 @@ export default async function Workspace({
                   <h2>Recent property activity</h2>
                   <Badge>Auditable actions</Badge>
                 </div>
-                {capabilities.has("audit") ? (
+                {hasPropertyCapability("audit") ? (
                   <AuditRows propertyId={p} />
                 ) : (
                   <p className="muted">
@@ -722,7 +727,7 @@ export default async function Workspace({
             <Finance
               propertyId={p}
               next={next}
-              canWrite={capabilities.has("finance")}
+              canWrite={hasPropertyCapability("finance")}
               search={needle}
               skip={skip}
             />
@@ -854,6 +859,22 @@ export default async function Workspace({
                         <input name="reason" required />
                       </label>
                       <button className="button">Approve execution</button>
+                    </ActionForm>
+                  )}
+                  {l.status === "REVIEW" && (
+                    <ActionForm action="lease.return" next={next} id={l.id}>
+                      <label>
+                        Reason a new signature is needed
+                        <textarea
+                          name="reason"
+                          required
+                          minLength={10}
+                          maxLength={2000}
+                        />
+                      </label>
+                      <button className="button secondary">
+                        Return for a new signature
+                      </button>
                     </ActionForm>
                   )}
                   {l.status === "EXECUTED" &&
@@ -1024,8 +1045,12 @@ export default async function Workspace({
             </section>
           )}
           {section === "integrations" && <Integrations propertyId={p} />}
+          {section === "finance" && (
+            <FinancialReport actor={u} propertyId={p} />
+          )}
           {section === "reports" && (
             <ReportPanel
+              actor={u}
               propertyId={p}
               filters={q}
               canReadFinance={u.memberships.some(
@@ -1037,6 +1062,13 @@ export default async function Workspace({
           )}
           {section === "security" && (
             <>
+              <SecurityPanel
+                actor={u}
+                propertyId={p}
+                canReview={u.memberships.some(
+                  (m) => m.propertyId === p && m.role === "ADMIN",
+                )}
+              />
               <section className="panel">
                 <div className="panel-head">
                   <h2>Append-only activity record</h2>
@@ -1062,7 +1094,7 @@ export default async function Workspace({
                       {e.state} · {e.attempts} attempts ·{" "}
                       {e.lastError || "Queued"}
                     </p>
-                    {capabilities.has("settings") && (
+                    {hasPropertyCapability("settings") && (
                       <ActionForm action="job.retry" next={next} id={e.id}>
                         <button className="button secondary small-button">
                           Retry delivery
@@ -1653,6 +1685,20 @@ async function Settings({
           <label>
             Approved terms
             <textarea name="body" required minLength={100} rows={8} />
+          </label>
+          <label>
+            Electronic signing disclosure (optional)
+            <textarea
+              name="signingDisclosure"
+              minLength={30}
+              maxLength={4000}
+              rows={4}
+            />
+            <span className="small muted">
+              Leave blank for manual signing only. Enter the approved disclosure
+              to enable authenticator-backed electronic signing for new
+              agreements.
+            </span>
           </label>
           <label className="check-label">
             <input type="checkbox" name="legalApproval" required />I confirm

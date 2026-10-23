@@ -1,3 +1,4 @@
+import { securitySignal } from "../../../lib/security-monitor";
 import { NextResponse } from "next/server";
 import { assertSameOrigin } from "../../../lib/security";
 import { currentUser } from "../../../lib/current-user";
@@ -59,6 +60,8 @@ export async function POST(request: Request) {
     url.searchParams.set("success", "Saved successfully");
     return NextResponse.redirect(url, 303);
   } catch (error) {
+    if (error instanceof Error && error.message === "CSRF_ORIGIN_REJECTED")
+      await securitySignal({ kind: "CSRF_REJECTED", subject: "commands" });
     const url = new URL(next, request.url);
     const message =
       error instanceof z.ZodError

@@ -1,3 +1,6 @@
+import { securitySignal } from "../../../../lib/security-monitor";
+import { financialReconciliation } from "../../../../domain/reporting";
+import { activity } from "../../../../lib/activity";
 import { connectors } from "../../../../integrations";
 import { transaction } from "../../../../lib/db";
 import { event } from "../../../../domain/events";
@@ -52,6 +55,7 @@ export async function GET(
           "tickets",
           "analytics",
           "integrations",
+          "reconciliation",
           "export",
         ].map((r) => [
           `/${r}`,
@@ -187,6 +191,49 @@ export async function GET(
       p = query.get("propertyId") || "",
       page = Math.max(1, Math.min(10000, Number(query.get("page")) || 1)),
       skip = (page - 1) * 50;
+    if (resource === "reconciliation") {
+      const report = await financialReconciliation(
+        actor,
+        p,
+        Object.fromEntries(query),
+      );
+      await activity(actor.id, p, "reconciliation.exported", p);
+      const rows = [
+        [
+          "reference",
+          "method",
+          "status",
+          "received_minor",
+          "refunded_minor",
+          "allocated_minor",
+          "unallocated_minor",
+          "receipt",
+          "exception",
+        ],
+        ...report.transactions.map((t) => [
+          t.reference,
+          t.method,
+          t.status,
+          String(t.received),
+          String(t.refunded),
+          String(t.allocated),
+          String(t.unallocated),
+          t.receipt || "",
+          t.exception || "",
+        ]),
+      ];
+      return new Response(
+        rows.map((r) => r.map(csvCell).join(",")).join("\r\n"),
+        {
+          headers: {
+            "Content-Type": "text/csv",
+            "Content-Disposition":
+              'attachment; filename="legacy-reconciliation.csv"',
+            "Cache-Control": "no-store",
+          },
+        },
+      );
+    }
     const target =
       resource === "export" ? query.get("resource") || "" : resource;
     if (resource === "exchange") {
@@ -223,6 +270,7 @@ export async function GET(
     };
     if (!caps[target]) return json({ error: "NOT_FOUND" }, 404);
     await permit(actor, p, caps[target]);
+    await activity(actor.id, p, "api.read", target);
     const from = query.get("from"),
       to = query.get("to");
     const dateFilter =
@@ -375,6 +423,8 @@ export async function POST(
     const d = JSON.parse(text);
     return json({ data: await command(actor, String(d.action), d) });
   } catch (error) {
+    if (error instanceof Error && error.message === "CSRF_ORIGIN_REJECTED")
+      await securitySignal({ kind: "CSRF_REJECTED", subject: "commands" });
     return json(
       {
         error:

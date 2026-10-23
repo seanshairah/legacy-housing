@@ -11,7 +11,19 @@ export async function issueLease(
   return transaction(async (tx) => {
     const a = await tx.application.findUniqueOrThrow({
       where: { id: applicationId },
-      include: { reservations: true, user: true },
+      include: {
+        reservations: {
+          include: {
+            bed: {
+              include: {
+                room: { include: { floor: { include: { building: true } } } },
+              },
+            },
+          },
+        },
+        user: true,
+        property: true,
+      },
     });
     await permit(actor, a.propertyId, "leases", tx);
     if (a.status !== "LEASE_SIGNING_PENDING")
@@ -33,7 +45,12 @@ export async function issueLease(
     const snapshot = JSON.stringify({
       version: template.version,
       terms: template.body,
+      electronicSigningDisclosure: template.signingDisclosure || null,
       resident: a.user.name,
+      property: a.property.name,
+      legalEntity: a.property.legalEntity,
+      location: a.property.location,
+      space: `${reservation.bed.room.floor.building.name} / ${reservation.bed.room.floor.name} / Room ${reservation.bed.room.name} / ${reservation.bed.label}`,
       reservationId: reservation.id,
       startAt: reservation.startAt.toISOString(),
       endAt: reservation.endAt.toISOString(),
@@ -133,7 +150,11 @@ export async function executeLease(actor: Actor, id: string, reason: string) {
     const doc = await tx.document.findUniqueOrThrow({
       where: { id: l.signedDocumentId! },
     });
-    if (doc.hash !== l.signedHash || doc.scanResult !== "CLEAN")
+    if (
+      doc.hash !== l.signedHash ||
+      doc.scanResult !== "CLEAN" ||
+      !["CLEAN", "APPROVED"].includes(doc.state)
+    )
       throw new Error("SIGNED_COPY_INVALID");
     await tx.lease.update({
       where: { id },
@@ -156,6 +177,58 @@ export async function executeLease(actor: Actor, id: string, reason: string) {
       data: { status: "READY_FOR_MOVE_IN" },
     });
     await event(tx, actor.id, l.propertyId, "lease.executed", id, {}, l.userId);
+  });
+}
+export async function returnSignedLease(
+  actor: Actor,
+  id: string,
+  reason: string,
+) {
+  if (reason.trim().length < 10 || reason.length > 2000)
+    throw new Error("REVIEW_REASON_REQUIRED");
+  return transaction(async (tx) => {
+    const l = await tx.lease.findUniqueOrThrow({ where: { id } });
+    await permit(actor, l.propertyId, "leases", tx);
+    if (l.status !== "REVIEW" || l.userId === actor.id || !l.signedDocumentId)
+      throw new Error("LEASE_NOT_READY");
+    await tx.leaseEvent.create({
+      data: {
+        leaseId: id,
+        actorId: actor.id,
+        type: "SIGNATURE_RETURNED",
+        evidence: {
+          reason,
+          documentId: l.signedDocumentId,
+          signedHash: l.signedHash,
+        },
+      },
+    });
+    await tx.document.update({
+      where: { id: l.signedDocumentId },
+      data: { state: "REJECTED", reviewerId: actor.id, reason },
+    });
+    await tx.leaseSigningChallenge.updateMany({
+      where: { leaseId: id, consumedAt: null },
+      data: { consumedAt: new Date() },
+    });
+    await tx.lease.update({
+      where: { id },
+      data: {
+        status: "AWAITING_SIGNATURE",
+        signedDocumentId: null,
+        signedHash: null,
+        signedAt: null,
+      },
+    });
+    await event(
+      tx,
+      actor.id,
+      l.propertyId,
+      "lease.signature_returned",
+      id,
+      { reason },
+      l.userId,
+    );
   });
 }
 export async function checkIn(actor: Actor, id: string) {

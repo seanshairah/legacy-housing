@@ -1,3 +1,8 @@
+import { LeaseTerms } from "../../components/lease-terms";
+import { hash } from "../../lib/security";
+import { LiveRefresh } from "../../components/live-refresh";
+import { ElectronicSigningForm } from "../../components/e-sign-form";
+import { activity } from "../../lib/activity";
 import Link from "next/link";
 import {
   ArrowUpRight,
@@ -28,6 +33,7 @@ export default async function Portal({
 }) {
   const u = await requireUser(),
     q = await searchParams;
+  await activity(u.id, null, "portal.viewed", u.id);
   const [applications, documents, payments, tickets, notices, leases] =
     await Promise.all([
       db.application.findMany({
@@ -84,7 +90,17 @@ export default async function Portal({
   });
   const offers = await db.waitlist.findMany({
     where: { userId: u.id, state: "OFFERED" },
-    include: { property: true },
+    include: {
+      property: {
+        include: {
+          templates: {
+            where: { approvedAt: { not: null } },
+            orderBy: { version: "desc" },
+            take: 1,
+          },
+        },
+      },
+    },
   });
   const active = applications.find(
     (a) => !["DECLINED", "WITHDRAWN", "ENDED"].includes(a.status),
@@ -152,6 +168,7 @@ export default async function Portal({
             <Bell size={18} />
           </div>
         </header>
+        <LiveRefresh />
         <main id="main" className="workspace-content">
           <PageHead
             eyebrow="MAKE YOURSELF AT HOME"
@@ -180,10 +197,26 @@ export default async function Portal({
                 Your waiting-list offer expires with its temporary bed hold.
                 Accept after reviewing the application policy to begin.
               </p>
-              <ActionForm action="waitlist.accept" id={offer.id}>
+              {offer.property.templates[0] && (
+                <details>
+                  <summary>Review tenancy conditions</summary>
+                  <p style={{ whiteSpace: "pre-wrap" }}>
+                    {offer.property.templates[0].body}
+                  </p>
+                </details>
+              )}
+              <ActionForm
+                action="waitlist.accept"
+                id={offer.id}
+                tenancyTermsHash={
+                  offer.property.templates[0]
+                    ? hash(offer.property.templates[0].body)
+                    : ""
+                }
+              >
                 <label className="check-label">
                   <input name="consent" type="checkbox" required />I accept the
-                  application policy.
+                  application policy and any displayed tenancy conditions.
                 </label>
                 <button className="button">Accept offer & apply</button>
               </ActionForm>
@@ -617,9 +650,31 @@ export default async function Portal({
                 <a className="text-link" href={`/api/financial/lease/${l.id}`}>
                   Download agreement PDF ↗
                 </a>
+                <details>
+                  <summary>Read agreement online</summary>
+                  <LeaseTerms snapshot={JSON.parse(l.documentSnapshot)} />
+                </details>
                 <p className="small muted">
                   Document fingerprint: {l.documentHash}
                 </p>
+                {l.signedDocumentId && (
+                  <p>
+                    <a
+                      className="text-link"
+                      href={`/api/documents/${l.signedDocumentId}`}
+                    >
+                      Download signed lease copy ↗
+                    </a>
+                  </p>
+                )}
+                {l.status === "AWAITING_SIGNATURE" &&
+                  JSON.parse(l.documentSnapshot)
+                    .electronicSigningDisclosure && (
+                    <ElectronicSigningForm
+                      leaseId={l.id}
+                      mfaEnabled={u.mfaConfirmed}
+                    />
+                  )}
                 {l.status === "AWAITING_SIGNATURE" && (
                   <ActionForm action="lease.sign" id={l.id}>
                     <label>

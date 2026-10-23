@@ -1224,3 +1224,371 @@ it("requires staff and independent approval for cash while retaining excess fund
   );
   expect((await account(f.resident.id, f.property.id)).credit).toBe(500n);
 });
+
+describe("original Word scope completion", () => {
+  async function signable() {
+    const f = await fixture(),
+      a = await reserve(f.resident, hold(f.room.beds[0].id));
+    await db.reservation.update({
+      where: { id: a.reservation.id },
+      data: { state: "CONFIRMED", expiresAt: null },
+    });
+    await db.application.update({
+      where: { id: a.application.id },
+      data: { status: "LEASE_SIGNING_PENDING" },
+    });
+    const disclosure =
+      "TEST ONLY: I intend my typed name and authenticator confirmation to sign this exact synthetic agreement electronically. Management reviews execution separately.";
+    const template = await db.leaseTemplate.create({
+      data: {
+        propertyId: f.property.id,
+        version: 1,
+        title: "Synthetic electronic terms",
+        body: "Synthetic lease test terms only",
+        hash: hash("Synthetic lease test terms only"),
+        signingDisclosure: disclosure,
+        approvedAt: new Date(),
+        approvedBy: f.admin.id,
+      },
+    });
+    const lease = await issueLease(f.admin, a.application.id, template.id);
+    const { newTotpSecret } = await import("../src/lib/security");
+    const secret = newTotpSecret();
+    await db.user.update({
+      where: { id: f.resident.id },
+      data: { mfaSecret: encrypt(secret), mfaConfirmed: true },
+    });
+    return { f, lease, secret };
+  }
+  it("signs the exact agreement with MFA, preserves the scanned signed PDF and requires independent execution", async () => {
+    const { beginElectronicSigning, signElectronically } =
+      await import("../src/domain/e-signature");
+    const { totp } = await import("../src/lib/security");
+    const { f, lease, secret } = await signable();
+    await expect(beginElectronicSigning(f.other, lease.id)).rejects.toThrow(
+      "AUTHENTICATOR",
+    );
+    const review = await beginElectronicSigning(f.resident, lease.id),
+      code = totp(secret).generate();
+    const input = {
+      leaseId: lease.id,
+      challenge: review.challenge,
+      documentHash: review.documentHash,
+      name: f.resident.name,
+      code,
+      consent: true,
+    };
+    await expect(
+      signElectronically(f.resident, {
+        ...input,
+        documentHash: "0".repeat(64),
+      }),
+    ).rejects.toThrow("MISMATCH");
+    await expect(
+      signElectronically(f.resident, { ...input, name: "Someone Else" }),
+    ).rejects.toThrow("MISMATCH");
+    await expect(
+      signElectronically(f.resident, { ...input, consent: false }),
+    ).rejects.toThrow();
+    const result = await signElectronically(f.resident, input);
+    expect(result.status).toBe("REVIEW");
+    const signed = await download(f.resident, result.documentId);
+    expect(hash(signed.bytes)).toBe(
+      (await db.lease.findUniqueOrThrow({ where: { id: lease.id } }))
+        .signedHash,
+    );
+    expect(signed.bytes.subarray(0, 5).toString()).toBe("%PDF-");
+    await expect(signElectronically(f.resident, input)).rejects.toThrow(
+      "LEASE_SIGNATURE_DENIED",
+    );
+    const e = await db.leaseEvent.findFirstOrThrow({
+      where: { leaseId: lease.id, type: "ELECTRONICALLY_SIGNED" },
+    });
+    expect(JSON.stringify(e.evidence)).toContain(review.documentHash);
+    expect(JSON.stringify(e.evidence)).not.toContain(review.challenge);
+    await executeLease(
+      f.admin,
+      lease.id,
+      "Test signer and exact signed PDF independently checked",
+    );
+    await expect(
+      db.leaseEvent.update({ where: { id: e.id }, data: { type: "FORGED" } }),
+    ).rejects.toThrow(/immutable/i);
+  });
+  it("rejects expired signing challenges, another verified signer and alteration of the issued source", async () => {
+    const { beginElectronicSigning, signElectronically } =
+        await import("../src/domain/e-signature"),
+      { totp } = await import("../src/lib/security");
+    const { f, lease, secret } = await signable();
+    const review = await beginElectronicSigning(f.resident, lease.id);
+    await db.leaseSigningChallenge.update({
+      where: { tokenHash: hash(review.challenge) },
+      data: { expiresAt: new Date(0) },
+    });
+    await expect(
+      signElectronically(f.resident, {
+        leaseId: lease.id,
+        challenge: review.challenge,
+        documentHash: review.documentHash,
+        name: f.resident.name,
+        code: totp(secret).generate(),
+        consent: true,
+      }),
+    ).rejects.toThrow("EXPIRED_OR_USED");
+    await db.user.update({
+      where: { id: f.other.id },
+      data: { mfaSecret: encrypt(secret), mfaConfirmed: true },
+    });
+    await expect(beginElectronicSigning(f.other, lease.id)).rejects.toThrow(
+      "LEASE_SIGNATURE_DENIED",
+    );
+    await expect(
+      db.lease.update({
+        where: { id: lease.id },
+        data: { documentSnapshot: "Changed after issue" },
+      }),
+    ).rejects.toThrow("immutable");
+  });
+  it("blocks rejected signing evidence and supports audited return and replacement before execution", async () => {
+    const { f, lease } = await signable(),
+      { returnSignedLease } = await import("../src/domain/leases");
+    const doc = await upload(f.resident, {
+      propertyId: f.property.id,
+      applicationId: lease.applicationId,
+      kind: "SIGNED_LEASE",
+      filename: "first-signed.pdf",
+      bytes: await pdf(),
+    });
+    await scanDocument(doc.id);
+    await submitSignedLease(f.resident, lease.id, doc.id, true);
+    await reviewDocument(
+      f.admin,
+      doc.id,
+      false,
+      "Synthetic signature evidence was incomplete",
+    );
+    await expect(
+      executeLease(f.admin, lease.id, "Attempt to use rejected evidence"),
+    ).rejects.toThrow("SIGNED_COPY_INVALID");
+    await returnSignedLease(
+      f.admin,
+      lease.id,
+      "Please provide a complete signed agreement",
+    );
+    const replacement = await upload(f.resident, {
+      propertyId: f.property.id,
+      applicationId: lease.applicationId,
+      kind: "SIGNED_LEASE",
+      filename: "replacement-signed.pdf",
+      bytes: await pdf(),
+    });
+    await scanDocument(replacement.id);
+    await submitSignedLease(f.resident, lease.id, replacement.id, true);
+    await executeLease(
+      f.admin,
+      lease.id,
+      "Replacement copy independently checked",
+    );
+    expect(replacement.version).toBe(2);
+    expect(
+      await db.leaseEvent.count({
+        where: { leaseId: lease.id, type: "SIGNATURE_RETURNED" },
+      }),
+    ).toBe(1);
+  });
+  it("commits one signature and one downloadable artifact under competing submissions", async () => {
+    const { beginElectronicSigning, signElectronically } =
+        await import("../src/domain/e-signature"),
+      { totp } = await import("../src/lib/security");
+    const { f, lease, secret } = await signable(),
+      review = await beginElectronicSigning(f.resident, lease.id);
+    const input = {
+      leaseId: lease.id,
+      challenge: review.challenge,
+      documentHash: review.documentHash,
+      name: f.resident.name,
+      code: totp(secret).generate(),
+      consent: true,
+    };
+    const results = await Promise.allSettled([
+      signElectronically(f.resident, input),
+      signElectronically(f.resident, input),
+    ]);
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    expect(
+      await db.document.count({
+        where: { applicationId: lease.applicationId, kind: "SIGNED_LEASE" },
+      }),
+    ).toBe(1);
+    expect(
+      await db.leaseEvent.count({
+        where: { leaseId: lease.id, type: "ELECTRONICALLY_SIGNED" },
+      }),
+    ).toBe(1);
+  });
+  it("calculates rental debt, net allocations after refunds and finance-only reconciliation from source records", async () => {
+    const { financialReconciliation } = await import("../src/domain/reporting");
+    const f = await fixture();
+    await reserve(f.resident, hold(f.room.beds[0].id));
+    await issueCharge(f.finance, {
+      userId: f.resident.id,
+      propertyId: f.property.id,
+      reference: `scope-${randomUUID()}`,
+      category: "RENT",
+      description: "Synthetic due rent",
+      amount: "100.00",
+      dueAt: new Date(Date.now() - 86400000),
+    });
+    const p = await payment(f, 4000n);
+    await settleProvider(p.id, p.providerId!, "scope-test");
+    await refund(
+      f.finance,
+      p.id,
+      "10.00",
+      "Externally verified test refund",
+      `refund-${randomUUID()}`,
+    );
+    const r = await financialReconciliation(f.finance, f.property.id);
+    expect(r.netDue).toBe(10000n);
+    expect(r.collected).toBe(3000n);
+    expect(r.overdueRent).toBe(7000n);
+    expect(r.collectionPercent).toBe(30);
+    expect(r.transactions[0].refunded).toBe(1000n);
+    expect(r.exceptions).toBe(0);
+    await expect(
+      financialReconciliation(f.caretaker, f.property.id),
+    ).rejects.toThrow("FORBIDDEN");
+    await expect(
+      financialReconciliation(f.finance, f.property.id, { from: "bad" }),
+    ).rejects.toThrow("INVALID_REPORT_PERIOD");
+  });
+  it("reports a defined renewal cohort and complaint trend with room/property scope", async () => {
+    const { operationalAnalytics } = await import("../src/domain/reporting");
+    const { f, lease } = await signable();
+    await db.lease.update({
+      where: { id: lease.id },
+      data: { status: "EXECUTED", executedAt: new Date() },
+    });
+    await db.tenancyRequest.create({
+      data: {
+        leaseId: lease.id,
+        userId: f.resident.id,
+        propertyId: f.property.id,
+        type: "RENEWAL",
+        state: "APPROVED",
+        targetBedId: f.room.beds[0].id,
+        startAt: new Date(Date.now() + 120 * 86400000),
+        endAt: new Date(Date.now() + 180 * 86400000),
+        reason: "Synthetic cohort test",
+      },
+    });
+    await createTicket(f.resident, {
+      propertyId: f.property.id,
+      type: "COMPLAINT",
+      category: "Noise",
+      priority: "NORMAL",
+      subject: "Synthetic recurring noise",
+      body: "Synthetic complaint trend verification",
+    });
+    const r = await operationalAnalytics(f.admin, f.property.id, {
+      from: new Date(Date.now() - 86400000).toISOString(),
+      to: new Date(Date.now() + 200 * 86400000).toISOString(),
+    });
+    expect(r.renewalPercent).toBe(100);
+    expect(r.eligibleLeases).toBe(1);
+    expect(r.trends[0].complaints).toBe(1);
+    const empty = await operationalAnalytics(f.admin, f.property.id, {
+      room: "another-property-room",
+    });
+    expect(empty.rooms).toHaveLength(0);
+    expect(empty.trends).toHaveLength(0);
+  });
+  it("detects repeated attacks without logging identifiers and restricts alert response by property", async () => {
+    const { securitySignal } = await import("../src/lib/security-monitor"),
+      { visibleSecurityAlerts, reviewSecurityAlert } =
+        await import("../src/domain/monitoring");
+    const f = await fixture();
+    const subject = `private-${randomUUID()}@example.invalid`;
+    for (let n = 0; n < 5; n++)
+      await securitySignal({
+        kind: "AUTH_FAILURE",
+        subject,
+        propertyId: f.property.id,
+      });
+    const alerts = await visibleSecurityAlerts(f.admin, f.property.id),
+      a = alerts.find((a) => a.subjectHash === hash(subject))!;
+    expect(a.severity).toBe("HIGH");
+    expect(a.occurrences).toBe(5);
+    expect(JSON.stringify(a)).not.toContain(subject);
+    await reviewSecurityAlert(
+      f.admin,
+      a.id,
+      "RESOLVED",
+      "Synthetic incident investigated and resolved",
+    );
+    await securitySignal({
+      kind: "AUTH_FAILURE",
+      subject,
+      propertyId: f.property.id,
+    });
+    expect(
+      (await db.securityAlert.findUniqueOrThrow({ where: { id: a.id } })).state,
+    ).toBe("OPEN");
+    const other = await fixture();
+    await expect(
+      reviewSecurityAlert(
+        other.admin,
+        a.id,
+        "RESOLVED",
+        "Forged cross-property response",
+      ),
+    ).rejects.toThrow("FORBIDDEN");
+    expect(
+      await db.auditEvent.count({
+        where: { objectId: a.id, action: "security.alert_reviewed" },
+      }),
+    ).toBe(1);
+    await securitySignal({
+      kind: "AUTH_FAILURE",
+      subject: `global-${subject}`,
+    });
+    expect(
+      (await visibleSecurityAlerts(f.admin, f.property.id)).every(
+        (a) => a.propertyId === f.property.id,
+      ),
+    ).toBe(true);
+  });
+});
+
+it("requires renewed consent when published tenancy conditions change before submission", async () => {
+  const f = await fixture(),
+    body =
+      "Synthetic published tenancy conditions for a versioned application consent test.";
+  const t = await db.leaseTemplate.create({
+    data: {
+      propertyId: f.property.id,
+      version: 1,
+      title: "Test conditions",
+      body,
+      hash: hash(body),
+      approvedAt: new Date(),
+    },
+  });
+  await expect(reserve(f.resident, hold(f.room.beds[0].id))).rejects.toThrow(
+    "TENANCY_TERMS_CHANGED",
+  );
+  await reserve(f.resident, {
+    ...hold(f.room.beds[0].id),
+    tenancyTermsHash: hash(body),
+  });
+  expect(
+    await db.consent.count({
+      where: {
+        userId: f.resident.id,
+        purpose: "TENANCY_CONDITIONS",
+        documentHash: hash(body),
+        version: `template-${t.id}-v1`,
+      },
+    }),
+  ).toBe(1);
+});

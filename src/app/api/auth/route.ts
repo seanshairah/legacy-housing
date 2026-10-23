@@ -1,3 +1,5 @@
+import { securitySignal } from "../../../lib/security-monitor";
+import { activity } from "../../../lib/activity";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { assertSameOrigin, hash } from "../../../lib/security";
@@ -63,7 +65,20 @@ export async function POST(request: Request) {
       const raw = request.headers
         .get("cookie")
         ?.match(/legacy_session=([^;]+)/)?.[1];
-      if (raw) await db.session.deleteMany({ where: { tokenHash: hash(raw) } });
+      if (raw) {
+        const existing = await db.session.findUnique({
+          where: { tokenHash: hash(raw) },
+        });
+        if (existing) {
+          await activity(
+            existing.userId,
+            null,
+            "session.logged_out",
+            existing.userId,
+          );
+          await db.session.deleteMany({ where: { tokenHash: hash(raw) } });
+        }
+      }
       const response = NextResponse.json({ ok: true, redirect: "/" });
       response.cookies.delete("legacy_session");
       return response;
@@ -72,6 +87,8 @@ export async function POST(request: Request) {
       headers: { "Cache-Control": "no-store" },
     });
   } catch (error) {
+    if (error instanceof Error && error.message === "CSRF_ORIGIN_REJECTED")
+      await securitySignal({ kind: "CSRF_REJECTED", subject: "auth" });
     const message =
       error instanceof z.ZodError
         ? "Please check the entered fields."

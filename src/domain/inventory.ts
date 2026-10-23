@@ -1,7 +1,7 @@
 import { quoteBed, priceJson } from "./pricing";
 import { APPLICATION_POLICY_VERSION, APPLICATION_POLICY } from "./policies";
 import { z } from "zod";
-import { transaction } from "../lib/db";
+import { transaction, type Tx } from "../lib/db";
 import { type Actor, permit } from "./access";
 import { event } from "./events";
 import { hash } from "../lib/security";
@@ -13,6 +13,29 @@ export const datesSchema = z
       v.endAt.getTime() - v.startAt.getTime() <= 2 * 366 * 86400000,
     { message: "Select a valid stay of up to two years" },
   );
+async function acceptPublishedTenancyConditions(
+  tx: Tx,
+  userId: string,
+  propertyId: string,
+  acceptedHash?: string,
+) {
+  const template = await tx.leaseTemplate.findFirst({
+    where: { propertyId, approvedAt: { not: null } },
+    orderBy: { version: "desc" },
+  });
+  if (!template) return;
+  const fingerprint = hash(template.body);
+  if (acceptedHash !== fingerprint)
+    throw new Error("TENANCY_TERMS_CHANGED_REVIEW_AND_RETRY");
+  await tx.consent.create({
+    data: {
+      userId,
+      purpose: "TENANCY_CONDITIONS",
+      version: `template-${template.id}-v${template.version}`,
+      documentHash: fingerprint,
+    },
+  });
+}
 export async function reserve(actor: Actor, input: unknown) {
   const data = z
     .object({
@@ -21,6 +44,7 @@ export async function reserve(actor: Actor, input: unknown) {
       endAt: z.coerce.date(),
       consent: z.literal(true),
       termsVersion: z.string().min(1),
+      tenancyTermsHash: z.string().optional(),
       expectedPriceMinor: z.string().regex(/^\d+$/).optional(),
     })
     .parse(input);
@@ -45,6 +69,12 @@ export async function reserve(actor: Actor, input: unknown) {
     });
     const property = bed.room.floor.building.property;
     if (!property.published || bed.blocked) throw new Error("BED_UNAVAILABLE");
+    await acceptPublishedTenancyConditions(
+      tx,
+      actor.id,
+      property.id,
+      data.tenancyTermsHash,
+    );
     await tx.$queryRaw`SELECT id FROM "Bed" WHERE id=${bed.id} FOR UPDATE`;
     await tx.reservation.updateMany({
       where: { bedId: bed.id, state: "HOLD", expiresAt: { lte: new Date() } },
@@ -438,6 +468,7 @@ export async function acceptWaitlist(
   actor: Actor,
   id: string,
   consent: boolean,
+  tenancyTermsHash?: string,
 ) {
   if (!consent) throw new Error("CONSENT_REQUIRED");
   return transaction(async (tx) => {
@@ -451,6 +482,12 @@ export async function acceptWaitlist(
     const hold = await tx.reservation.findUniqueOrThrow({
       where: { id: entry.offeredReservationId },
     });
+    await acceptPublishedTenancyConditions(
+      tx,
+      actor.id,
+      entry.propertyId,
+      tenancyTermsHash,
+    );
     if (
       hold.state !== "HOLD" ||
       !hold.expiresAt ||

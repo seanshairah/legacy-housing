@@ -1,5 +1,7 @@
 # Legacy Heights
 
+The original client Word scope is now preserved and audited across **141 substantive items** in [the completeness audit](docs/audit/ORIGINAL_SCOPE_COMPLETENESS.md). Latest verification: [scope audit evidence](docs/QA/SCOPE_AUDIT_EVIDENCE.md).
+
 A dedicated accommodation platform for student and private residents: public catalogue, bed-level dated reservations, resident portal, property-scoped staff workspaces, KYC quarantine/review, finance, signed-upload leases, support, and integration exchange.
 
 **Development implementation, not an approved production deployment.** All supplied inventory and people are synthetic. External merchant, messaging and legal approvals are not invented. See [implementation status](docs/IMPLEMENTATION_STATUS.md), [scope traceability](docs/audit/LEGACY_SCOPE_TRACEABILITY_MATRIX.md), and [release evidence](docs/QA/RELEASE_EVIDENCE.md).
@@ -64,3 +66,5 @@ Configuration: `DATABASE_URL`, `APP_URL`, independent 32-byte hexadecimal `DATA_
 `docker compose up --build` defines web, worker, database, scanner and daily encrypted backups. Configure `.env`, local DB password and all encryption keys first. The image build and isolated container health/database startup were tested locally. A fresh local Compose stack also passed startup, page/health and encrypted-backup checks; acceptance on the selected production host remains a release gate. In cloud environments where the platform proxy hostname is injected into the host, `node --import tsx scripts/build-cloud.ts` preserves the same proxy route and CA trust inside BuildKit; it does not bypass network policy. It does not seed real properties or create an administrator automatically. Scanner signatures require maintenance/network access. Add the supplied Caddy reverse-proxy configuration, DNS, certificate issuance, managed secrets and external backup storage for production.
 
 See [runbook](docs/ops/RUNBOOK.md) for migration, rollback, backup/restore, monitoring, outages and key rotation; [user guides](docs/USER_GUIDES/README.md) for role workflows; [client decisions](docs/CLIENT_DECISIONS.md) for required real-world inputs.
+
+Native electronic lease signing uses verified contacts, an authenticator, a one-use document-bound review and an approved versioned disclosure. The exact scanned signed PDF and immutable evidence remain subject to independent execution review. Blank disclosures keep manual signing. Production browser checks can be run after `npm run build` with `LEGACY_E2E_PRODUCTION=true` and the loopback `legacy_test` DATABASE_URL override. Security signals and reviews are in the scoped staff security workspace; the scheduled weekly security workflow complements production host intrusion monitoring.

@@ -1,3 +1,4 @@
+import { securitySignal } from "../lib/security-monitor";
 import { spawn } from "node:child_process";
 import { mkdir, writeFile, readFile, unlink } from "node:fs/promises";
 import path from "node:path";
@@ -231,6 +232,12 @@ export async function scanDocument(id: string) {
       return;
     }
     const result = await scanBytes(bytes);
+    if (result === "INFECTED")
+      await securitySignal({
+        kind: "MALWARE_DETECTED",
+        subject: doc.id,
+        propertyId: doc.propertyId,
+      });
     await transaction(async (tx) => {
       await tx.document.updateMany({
         where: { id, state: "QUARANTINED" },
@@ -259,6 +266,12 @@ export async function scanDocument(id: string) {
           "Scanning could not complete. The file stays inaccessible; a reviewer can retry after the scanner or validation issue is resolved.",
       },
     });
+    if (doc.scanAttempts + 1 >= 5)
+      await securitySignal({
+        kind: "SCAN_EXHAUSTED",
+        subject: doc.id,
+        propertyId: doc.propertyId,
+      });
     throw error;
   }
 }
@@ -342,4 +355,31 @@ export async function download(actor: Actor, id: string) {
     event(tx, actor.id, doc.propertyId, "document.downloaded", id),
   );
   return { doc, bytes };
+}
+
+// Generated signing evidence is not downloadable until its signing transaction commits.
+export async function prepareGeneratedPdf(bytes: Buffer) {
+  if (
+    bytes.length < 4 ||
+    bytes.length > 10 * 1024 * 1024 ||
+    !(await validatePrivateBytes(bytes, "application/pdf"))
+  )
+    throw new Error("GENERATED_DOCUMENT_INVALID");
+  if ((await scanBytes(bytes)) !== "CLEAN")
+    throw new Error("GENERATED_DOCUMENT_NOT_CLEAN");
+  const storageKey = token();
+  await mkdir(path.dirname(storagePath(storageKey)), {
+    recursive: true,
+    mode: 0o700,
+  });
+  await writeFile(storagePath(storageKey), encrypt(bytes, "FILE_KEY"), {
+    mode: 0o600,
+    flag: "wx",
+  });
+  return { storageKey, hash: hash(bytes), bytes: bytes.length };
+}
+export async function discardPreparedFile(storageKey: string) {
+  await unlink(storagePath(storageKey)).catch((error) => {
+    if (error.code !== "ENOENT") throw error;
+  });
 }

@@ -1,3 +1,4 @@
+import { securitySignal } from "../lib/security-monitor";
 import { db, type Tx } from "../lib/db";
 export type Actor = {
   id: string;
@@ -36,8 +37,15 @@ export async function permit(
     actor.apiPropertyId &&
     (actor.apiPropertyId !== propertyId ||
       !actor.apiScopes?.includes(capability))
-  )
+  ) {
+    await securitySignal({
+      kind: "ACCESS_DENIED",
+      subject: `${actor.id}:${capability}`,
+      propertyId,
+      actorId: actor.id,
+    });
     throw new Error("FORBIDDEN");
+  }
   const user = await client.user.findUnique({
     where: { id: actor.id },
     select: { active: true },
@@ -46,8 +54,15 @@ export async function permit(
   const grants = await client.membership.findMany({
     where: { userId: actor.id, propertyId },
   });
-  if (!grants.some((g) => rolePermissions[g.role]?.includes(capability)))
+  if (!grants.some((g) => rolePermissions[g.role]?.includes(capability))) {
+    await securitySignal({
+      kind: "ACCESS_DENIED",
+      subject: `${actor.id}:${capability}`,
+      propertyId,
+      actorId: actor.id,
+    });
     throw new Error("FORBIDDEN");
+  }
 }
 export async function ownerOrPermit(
   actor: Actor,

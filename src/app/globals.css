@@ -1129,7 +1129,7 @@ table {
 th {
   font-size: 9px;
   font-weight: 500;
-  color: #949c8c;
+  color: #5e6958;
   background: #f8f9f5;
   padding: 12px 14px;
   border-block: 1px solid #eaf0e2;
@@ -1209,7 +1209,7 @@ td .badge {
 summary {
   cursor: pointer;
   font-size: 12px;
-  color: #748266;
+  color: #5e6958;
   padding: 12px 0;
 }
 details > p {
@@ -2063,4 +2063,9 @@ footer,
 .empty h3,
 .priority-link small {
   color: #58634f;
+}
+
+.lease-card > .text-link {
+  min-height: 32px;
+  margin-block: 4px;
 }

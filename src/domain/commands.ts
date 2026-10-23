@@ -1,3 +1,6 @@
+import { returnSignedLease } from "./leases";
+import { beginElectronicSigning, signElectronically } from "./e-signature";
+import { reviewSecurityAlert } from "./monitoring";
 import { testConnector } from "../integrations";
 import { requestTenancyChange, reviewTenancyChange } from "./tenancy";
 import { z } from "zod";
@@ -143,24 +146,37 @@ export async function command(
         );
       });
     case "privacy.request":
-      return db.privacyRequest.create({
-        data: {
-          userId: actor.id,
-          type: z
-            .enum(["ACCESS", "EXPORT", "CORRECTION", "ERASURE"])
-            .parse(d.type),
-          reason: reason(),
-        },
+      return transaction(async (tx) => {
+        const request = await tx.privacyRequest.create({
+          data: {
+            userId: actor.id,
+            type: z
+              .enum(["ACCESS", "EXPORT", "CORRECTION", "ERASURE"])
+              .parse(d.type),
+            reason: reason(),
+          },
+        });
+        await event(tx, actor.id, null, "privacy.requested", request.id, {
+          type: request.type,
+        });
+        return request;
       });
     case "preferences":
-      return db.notificationPreference.upsert({
-        where: { userId: actor.id },
-        create: {
-          userId: actor.id,
-          email: d.email === "on",
-          sms: d.sms === "on",
-        },
-        update: { email: d.email === "on", sms: d.sms === "on" },
+      return transaction(async (tx) => {
+        const preferences = await tx.notificationPreference.upsert({
+          where: { userId: actor.id },
+          create: {
+            userId: actor.id,
+            email: d.email === "on",
+            sms: d.sms === "on",
+          },
+          update: { email: d.email === "on", sms: d.sms === "on" },
+        });
+        await event(tx, actor.id, null, "preferences.updated", actor.id, {
+          email: preferences.email,
+          sms: preferences.sms,
+        });
+        return preferences;
       });
     case "reserve":
       return reserve(actor, {
@@ -173,6 +189,7 @@ export async function command(
         actor,
         id(),
         d.consent === true || d.consent === "on",
+        text(d.tenancyTermsHash) || undefined,
       );
     case "waitlist":
       return joinWaitlist(actor, d);
@@ -319,6 +336,17 @@ export async function command(
       return refund(actor, id(), text(d.amount), reason(), text(d.reference));
     case "lease.issue":
       return issueLease(actor, text(d.applicationId), text(d.templateId));
+    case "lease.electronic.begin":
+      return beginElectronicSigning(actor, id());
+    case "lease.electronic.sign":
+      return signElectronically(actor, d);
+    case "security.review":
+      return reviewSecurityAlert(
+        actor,
+        id(),
+        z.enum(["ACKNOWLEDGED", "RESOLVED"]).parse(d.state),
+        text(d.reason),
+      );
     case "lease.sign":
       return submitSignedLease(
         actor,
@@ -326,6 +354,8 @@ export async function command(
         text(d.documentId),
         d.consent === true || d.consent === "on",
       );
+    case "lease.return":
+      return returnSignedLease(actor, id(), reason());
     case "lease.execute":
       return executeLease(actor, id(), reason());
     case "checkin":
@@ -456,8 +486,11 @@ export async function command(
           title: z.string().min(3).max(120),
           body: z.string().min(100).max(30000),
           legalApproval: z.literal("on"),
+          signingDisclosure: z.string().trim().max(4000).optional(),
         })
         .parse(d);
+      if (data.signingDisclosure && data.signingDisclosure.length < 30)
+        throw new Error("SIGNING_DISCLOSURE_TOO_SHORT");
       return transaction(async (tx) => {
         await permit(actor, data.propertyId, "settings", tx);
         const last = await tx.leaseTemplate.findFirst({
@@ -469,6 +502,7 @@ export async function command(
             propertyId: data.propertyId,
             title: data.title,
             body: data.body,
+            signingDisclosure: data.signingDisclosure || null,
             hash: hash(data.body),
             version: (last?.version || 0) + 1,
             approvedAt: new Date(),
