@@ -1,0 +1,109 @@
+services:
+  db:
+    image: postgres:16@sha256:9e2cf6287f25c3151f4c9421ccce2b17f3e60061c111a29165e0d2cdd9ff0a97
+    environment:
+      POSTGRES_DB: legacy_dev
+      POSTGRES_USER: legacy
+      POSTGRES_PASSWORD: ${LOCAL_DB_PASSWORD:?Set LOCAL_DB_PASSWORD in .env}
+    volumes:
+      - database:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U legacy -d legacy_dev
+      interval: 5s
+      timeout: 5s
+      retries: 12
+  scanner:
+    image: clamav/clamav:stable@sha256:e19130cdebaeacc71fa46eab3ed6f69941f2f22aa5e08d55e9197f8edf43ce5e
+    volumes:
+      - signatures:/var/lib/clamav
+    healthcheck:
+      test:
+        - CMD
+        - clamdscan
+        - --ping
+        - "1"
+      interval: 15s
+      timeout: 10s
+      retries: 20
+  web:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
+      secrets:
+        - platform-ca
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://legacy:${LOCAL_DB_PASSWORD}@db:5432/legacy_dev
+      CLAMAV_HOST: scanner
+      STORAGE_ROOT: /app/.data/private
+    ports:
+      - 127.0.0.1:3001:3000
+    depends_on:
+      db:
+        condition: service_healthy
+      scanner:
+        condition: service_healthy
+    volumes:
+      - private-files:/app/.data/private
+    command:
+      - sh
+      - -c
+      - npm run db:deploy && npm start
+    image: legacy-housing-web:latest
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://localhost:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+  worker:
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://legacy:${LOCAL_DB_PASSWORD}@db:5432/legacy_dev
+      CLAMAV_HOST: scanner
+      STORAGE_ROOT: /app/.data/private
+    depends_on:
+      web:
+        condition: service_healthy
+    volumes:
+      - private-files:/app/.data/private
+    command:
+      - node
+      - --import
+      - tsx
+      - scripts/worker.ts
+    image: legacy-housing-web:latest
+  backup:
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://legacy:${LOCAL_DB_PASSWORD}@db:5432/legacy_dev
+      STORAGE_ROOT: /app/.data/private
+    depends_on:
+      web:
+        condition: service_healthy
+    volumes:
+      - private-files:/app/.data/private:ro
+      - backups:/app/.data/backups
+    command:
+      - sh
+      - -c
+      - while true; do node --import tsx scripts/backup.ts || exit 1; sleep 86400; done
+    image: legacy-housing-web:latest
+volumes:
+  database: null
+  private-files: null
+  signatures: null
+  backups: null
+secrets:
+  platform-ca:
+    file: ${NODE_EXTRA_CA_CERTS:-/etc/ssl/certs/ca-certificates.crt}

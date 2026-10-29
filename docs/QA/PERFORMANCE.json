@@ -1,0 +1,16 @@
+{
+  "executedAt": "2026-10-29T14:59:03.303Z",
+  "runtime": "0eb3bd8d4943a172eb41c9a4f732aa77df9a5f39",
+  "image": "06d1a82518bad7a2262088e907cff6f061737a1fb48d049bc7cea0c783d6d022",
+  "databaseHealth": {
+    "ok": true,
+    "database": "up"
+  },
+  "syntheticCatalogue": true,
+  "requests": 50,
+  "concurrency": 5,
+  "p50Ms": 58.092205000000035,
+  "p95Ms": 175.903214,
+  "maxMs": 177.472389,
+  "limit": "Small local synthetic dataset; not production capacity or 1000-student load acceptance"
+}

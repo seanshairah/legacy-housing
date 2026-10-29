@@ -1,0 +1,39 @@
+# Operations runbook
+
+## Start, verify, restart
+
+Use the existing checkout. Cloud tasks are isolated; do not create a Git worktree unless requested. `./scripts/setup-local.sh` installs and prepares only the target. Start `npm run dev -- --port 3001` and `npm run worker` separately. Processes must restart after snapshot restoration; dependency files and database/storage files can persist. `GET /api/health` must return `ok:true,database:up`. Also request the catalogue and authenticated portal; an open port alone is insufficient. Check ClamAV's startup log, then upload a synthetic PDF and confirm quarantine → clean. Never approve a quarantined file because the scanner is unavailable.
+
+## Database changes
+
+Use `npm run db:deploy` against the dedicated Legacy database. Do not use db push/reset in production. All migrations must first succeed against a new disposable database and the PostgreSQL tests. Back up before deployment. For incompatible changes, stop writes, restore the prior application and database snapshot together, and reconcile provider callbacks before reopening. Prefer forward fixes for append-only financial evidence. Never delete allocations/receipts/audit events to make a migration pass.
+
+## Backups and restore
+
+Independent `BACKUP_KEY` is mandatory. `npm run backup` runs pg_dump and encrypts the dump plus already-encrypted private files into a mode-0600 authenticated bundle. The runtime container includes PostgreSQL client tools. On this cloud machine, `BACKUP_DOCKER_CONTAINER=housing-onboarding-db npm run backup` uses local tools inside its database container. Only dedicated `legacy_*` database names are accepted. Bundles remain in ignored `.data/backups`; copy encrypted bundles to approved offsite/versioned storage and separately escrow key versions. The Compose backup service runs every 86400 seconds and exits visibly on failure; monitor its exit state and backup age. Never treat local disk alone as disaster recovery.
+
+For a nonproduction drill: `node --env-file=.env --import tsx scripts/backup.ts --restore-drill <bundle-path>`. It creates a **new** legacy_restore_timestamp database and isolated file directory; it cannot overwrite an existing database. Verify counts, immutable evidence, balance reconciliation and private file plaintext hashes after decryption. Keep the restore database for inspection; remove only the disposable drill assets after review. Latest measured drill is in RELEASE_EVIDENCE. Required recovery objectives and offsite retention are client decisions; no production RPO/RTO is asserted.
+
+## Worker and outages
+
+Outbox claim leases prevent active workers claiming the same row; abandoned claims recover after five minutes. Exponential retry tops out at one hour, then DEAD. In-app notices are committed with domain state. Missing email/SMS configuration generates explicit failure, never simulated sent status. Inspect property security view and OutboxEvent state/attempts/lastError; retry property jobs from that view after correcting the prerequisite. Identity jobs require secure operator investigation or a new challenge; don't expose their encrypted payloads. Monitor oldest pending job, dead jobs, quarantined document age and scanner signature age. Stopping a worker must not allow an expired hold to be reused twice: the reservation service also expires old holds under the bed lock.
+
+For Paynow outages keep intents pending; never settle on a browser return or a proof upload. Durable callbacks trigger signed provider polling; reconcile ambiguous initiations with the merchant before starting a replacement. Compare local reference, provider reference, amount and currency. Paid/refunded statuses require controlled finance review and immutable reversal evidence. Do not log provider keys or dump webhook payloads with PII. Late deposit funds remain recorded; reselect an available bed before confirming residency.
+
+## Security and keys
+
+Revoke a staff role through settings; sessions are invalidated, and all permission checks read live grants. Revoke API keys through integrations. Lost staff MFA requires verified identity and an approved two-person recovery procedure by a trusted operator; no casual bypass exists. Rotate provider secrets in secure settings, perform a small sandbox verification, then retry failed jobs. Preserve TLS/checksum verification. DATA_KEY protects MFA/challenge payloads; FILE_KEY protects documents; BACKUP_KEY protects export bundles. Record key versions outside source. Re-encrypt ciphertext offline under controlled access when rotating; verify plaintext hashes before replacing any encrypted storage.
+
+Use TLS termination with the Caddy example and approved DNS, secure cookies, encrypted disks/private networking and least-privileged database/storage roles. The development trust-auth database is bound to loopback only; never publish it. Production bootstrap requires an already verified/MFA-enabled user and factual property JSON; it creates an unpublished property. Remove all fixture data by creating a clean production database, not by selectively deleting financial rows.
+
+## Incident and maintenance
+
+Freeze sensitive writes if financial or allocation invariants fail; retain evidence and reconcile using charge/payment/allocation/reversal records. Restrict affected accounts, revoke sessions/keys, preserve encrypted logs/backups, notify approved responders/DPO, follow incident/legal obligations, and validate recovery before reopening. Never send incident messages automatically without authorization.
+
+Daily: check health, oldest jobs, scanner signatures, expired holds, outstanding proofs and latest encrypted backup. Weekly: review failed deliveries, SLA breaches, reconciliation exceptions and dependency advisories. Monthly: sample object/property permission tests, restore a fresh backup, review staff/API grants and patch toolchains. Retention/erasure requires approved legal policy and legal-hold review; pending privacy requests must be handled by the designated operator. Deployment, intrusion monitoring integration, alert routing and legal controls must be tested on the selected host before release.
+
+## Security detection and signing operations
+
+Security workspace alerts persist authentication failures, rate limits, access/CSRF denials, malware and exhausted scans with pseudonymous hashes. Five repeated attempts in an hourly bucket become HIGH; malware/exhausted scanning alerts are HIGH immediately. Client-wide admin grants are required for global auth signals, property settings permission for property review. Investigate, acknowledge/resolve with a reason; continued threshold-reaching activity reopens a reviewed alert and notifies administrators again. Review associated immutable audit rows and user notifications. These application signals complement host/network intrusion detection; configure that and production alert routing on the chosen host. Weekly scheduled GitHub security audits activate when the workflow reaches the default branch and require Actions to remain enabled and a named operator to review failures.
+
+Before enabling native signing, obtain approval of the signing disclosure and exact lease terms, then create a new approved template. Existing issued sources cannot be edited. A signer must verify both contacts and enroll MFA. Never bypass a used/expired challenge or reuse a TOTP time step; restart review or wait for a fresh authenticator code. Scan failures block signing, and prepared files are unreachable until the signing transaction commits; rollback discards the prepared file. A crash can leave an unreferenced encrypted blob; do not expose it or remove it until retention policy and DB-reference checks permit cleanup. Staff independently verify the matching signed hash and signer before execution. Qualified local review must approve legal use; no third-party certificate is claimed.

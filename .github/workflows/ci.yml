@@ -1,0 +1,98 @@
+name: Legacy platform checks
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 4 * * 1"
+permissions:
+  contents: read
+jobs:
+  verify:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: legacy_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      scanner:
+        image: clamav/clamav:stable
+        env:
+          CLAMAV_NO_FRESHCLAMD: "true"
+        ports: ["3310:3310"]
+        options: >-
+          --health-cmd "clamdscan --ping 1"
+          --health-interval 15s --health-timeout 10s --health-retries 20
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/legacy_test
+      APP_URL: http://localhost:3002
+      LOCAL_DEMO: "false"
+      STORAGE_ROOT: .data/ci-private
+      CLAMAV_HOST: localhost
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - name: Ephemeral encryption keys
+        run: node -e "for(const key of ['DATA_KEY','FILE_KEY','BACKUP_KEY']) require('fs').appendFileSync(process.env.GITHUB_ENV,key+'='+require('crypto').randomBytes(32).toString('hex')+'\n')"
+      - run: npm ci
+      - run: npm run db:deploy
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run format:check
+      - run: npm audit --audit-level=high
+      - run: npm test -- --coverage
+      - run: npm run build
+      - name: Prepare isolated browser database
+        run: |
+          docker exec ${{ job.services.postgres.id }} createdb -U postgres legacy_test_browser
+          DATABASE_URL=postgresql://postgres:postgres@localhost:5432/legacy_test_browser npm run db:deploy
+      - name: Browser and accessibility journeys
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/legacy_test_browser
+          LEGACY_FULL_E2E: "true"
+          LEGACY_E2E_PRODUCTION: "true"
+        run: |
+          npx playwright install --with-deps chromium
+          CHROMIUM_PATH="$(find "$HOME/.cache/ms-playwright" -name chrome -type f | head -1)" npm run test:e2e
+      - name: Consistent encrypted backup and recovery drill
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/legacy_test_recovery
+          BACKUP_DOCKER_CONTAINER: ${{ job.services.postgres.id }}
+        run: node --import tsx scripts/verify-recovery.ts
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: verification-reports
+          path: |
+            coverage/coverage-summary.json
+            playwright-report/
+            .data/recovery-evidence-*.json
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: test-failure-evidence
+          path: |
+            playwright-report/
+            test-results/
+  static-security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install semgrep==1.182.1
+      - run: semgrep scan --config .semgrep.yaml --error --metrics off src
+      - uses: actions/setup-node@v4
+        with: { node-version: "24" }
+      - run: npm audit --audit-level=high
+      - run: node scripts/check-secrets.mjs
