@@ -21,6 +21,24 @@ model User {
   mfaConfirmed Boolean @default(false)
   active Boolean @default(true)
   createdAt DateTime @default(now())
+  evidenceRecorded PaymentEvidence[] @relation("EvidenceRecorder")
+  evidenceAssigned PaymentEvidence[] @relation("EvidenceReviewer")
+  disputesCreated PaymentDispute[] @relation("DisputeCreator")
+  disputesReviewed PaymentDispute[] @relation("DisputeReviewer")
+  disputeEvents PaymentDisputeEvent[] @relation("DisputeActor")
+  assignedApplicationReviews Application[] @relation("ApplicationReviewer")
+  applicationReviewNotes ApplicationReviewNote[]
+  invitationsSent AccountInvitation[] @relation("InvitationCreator")
+  invitationsAccepted AccountInvitation[] @relation("InvitationRecipient")
+  retentionProposed RetentionPolicy[] @relation("RetentionProposer")
+  retentionApproved RetentionPolicy[] @relation("RetentionApprover")
+  holdsImposed DocumentLegalHold[] @relation("HoldCreator")
+  holdsReleased DocumentLegalHold[] @relation("HoldReleaser")
+  deletionsRequested DocumentDeletion[] @relation("DeletionRequester")
+  deletionsApproved DocumentDeletion[] @relation("DeletionApprover")
+  ticketConfirmations Ticket[] @relation("TicketConfirmation")
+  organisationMemberships OrganisationMembership[]
+  platformGrant PlatformGrant?
   memberships Membership[]
   sessions Session[]
   challenges Challenge[]
@@ -69,6 +87,8 @@ model RateLimit {
 }
 model Property {
   id String @id @default(cuid())
+  organisationId String @default("mipf")
+  organisation Organisation @relation(fields:[organisationId],references:[id],onDelete:Restrict,onUpdate:NoAction)
   name String
   slug String @unique
   description String
@@ -93,6 +113,14 @@ model Property {
   tickets Ticket[]
   announcements Announcement[]
   integrations Integration[]
+  paymentEvidence PaymentEvidence[]
+  paymentDisputes PaymentDispute[]
+  applicationReviewNotes ApplicationReviewNote[]
+  invitations AccountInvitation[]
+  retentionPolicies RetentionPolicy[]
+  legalHolds DocumentLegalHold[]
+  documentDeletions DocumentDeletion[]
+  @@index([organisationId])
 }
 model Building {
   id String @id @default(cuid())
@@ -133,6 +161,7 @@ model Bed {
 }
 model Reservation {
   id String @id @default(cuid())
+  idempotencyKey String? @unique
   propertyId String
   userId String
   bedId String
@@ -167,6 +196,9 @@ model Waitlist {
 }
 model Application {
   id String @id @default(cuid())
+  assignedReviewerId String?
+  assignedReviewer User? @relation("ApplicationReviewer",fields:[assignedReviewerId],references:[id],onDelete:Restrict,onUpdate:NoAction)
+  reviewNotes ApplicationReviewNote[]
   userId String
   propertyId String
   status String @default("SUBMITTED")
@@ -212,6 +244,7 @@ model Document {
   storageKey String @unique
   version Int @default(1)
   state String @default("QUARANTINED")
+  deletedAt DateTime?
   scanResult String?
   scanAttempts Int @default(0)
   nextScanAt DateTime @default(now())
@@ -221,6 +254,8 @@ model Document {
   user User @relation(fields:[userId],references:[id],onDelete:Restrict)
   property Property @relation(fields:[propertyId],references:[id],onDelete:Restrict)
   application Application? @relation(fields:[applicationId],references:[id],onDelete:Restrict)
+  legalHolds DocumentLegalHold[]
+  deletion DocumentDeletion?
   @@index([state,createdAt])
 }
 model Charge {
@@ -260,6 +295,7 @@ model Payment {
   method String
   status String @default("PENDING")
   providerId String? @unique
+  providerConfigEncrypted String?
   pollUrl String?
   redirectUrl String?
   proofDocumentId String?
@@ -275,6 +311,8 @@ model Payment {
   allocations Allocation[]
   receipt Receipt?
   refunds Refund[]
+  evidence PaymentEvidence?
+  disputes PaymentDispute[]
 }
 model Allocation {
   id String @id @default(cuid())
@@ -376,6 +414,10 @@ model Ticket {
   dueAt DateTime
   firstResponseAt DateTime?
   resolvedAt DateTime?
+  resolutionConfirmedAt DateTime?
+  resolutionConfirmedBy String?
+  confirmedByUser User? @relation("TicketConfirmation",fields:[resolutionConfirmedBy],references:[id],onDelete:Restrict,onUpdate:NoAction)
+  reopenedCount Int @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   property Property @relation(fields:[propertyId],references:[id],onDelete:Restrict)
@@ -384,6 +426,7 @@ model Ticket {
 }
 model TicketMessage {
   id String @id @default(cuid())
+  internal Boolean @default(false)
   ticketId String
   actorId String
   body String
@@ -479,12 +522,15 @@ model TenancyRequest {
 }
 model PrivacyRequest {
   id String @id @default(cuid())
+  organisationId String @default("mipf")
+  organisation Organisation @relation(fields:[organisationId],references:[id],onDelete:Restrict,onUpdate:NoAction)
   userId String
   type String
   reason String
   state String @default("OPEN")
   resolution String?
   createdAt DateTime @default(now())
+  @@index([organisationId,state])
 }
 model NotificationPreference {
   userId String @id
@@ -543,4 +589,167 @@ model SecurityAlert {
   reviewedAt DateTime?
   resolution String?
   @@index([propertyId,state,lastSeenAt])
+}
+
+
+model Organisation {
+  id String @id @default(cuid())
+  slug String @unique
+  name String
+  legalEntity String
+  branding Json @default("{}")
+  residencyRegion String?
+  retentionPolicy Json @default("{}")
+  paymentCredentialsEncrypted String?
+  paymentMode String @default("disabled")
+  active Boolean @default(true)
+  createdAt DateTime @default(now())
+  properties Property[]
+  privacyRequests PrivacyRequest[]
+  memberships OrganisationMembership[]
+}
+model OrganisationMembership {
+  id String @id @default(cuid())
+  organisationId String
+  userId String
+  role String
+  createdAt DateTime @default(now())
+  organisation Organisation @relation(fields:[organisationId],references:[id],onDelete:Restrict,onUpdate:NoAction)
+  user User @relation(fields:[userId],references:[id],onDelete:Restrict,onUpdate:NoAction)
+  @@unique([organisationId,userId,role])
+  @@index([userId])
+}
+model PlatformGrant {
+  userId String @id
+  role String @default("OPERATOR")
+  createdAt DateTime @default(now())
+  user User @relation(fields:[userId],references:[id],onDelete:Restrict,onUpdate:NoAction)
+}
+model AccountInvitation {
+  id String @id @default(cuid())
+  email String
+  propertyId String
+  role String
+  tokenHash String @unique
+  invitedBy String
+  expiresAt DateTime
+  acceptedAt DateTime?
+  acceptedBy String?
+  revokedAt DateTime?
+  createdAt DateTime @default(now())
+  property Property @relation(fields:[propertyId],references:[id],onDelete:Restrict)
+  invitedByUser User @relation("InvitationCreator",fields:[invitedBy],references:[id],onDelete:Restrict)
+  acceptedByUser User? @relation("InvitationRecipient",fields:[acceptedBy],references:[id],onDelete:Restrict)
+  @@index([propertyId,email])
+}
+model RetentionPolicy {
+  id String @id @default(cuid())
+  propertyId String
+  kind String
+  retainDays Int
+  basis String
+  policyReference String
+  version Int
+  state String @default("DRAFT")
+  proposedBy String
+  approvedBy String?
+  approvedAt DateTime?
+  createdAt DateTime @default(now())
+  property Property @relation(fields:[propertyId],references:[id],onDelete:Restrict,onUpdate:NoAction)
+  proposedByUser User @relation("RetentionProposer",fields:[proposedBy],references:[id],onDelete:Restrict,onUpdate:NoAction)
+  approvedByUser User? @relation("RetentionApprover",fields:[approvedBy],references:[id],onDelete:Restrict,onUpdate:NoAction)
+  deletions DocumentDeletion[]
+  @@unique([propertyId,kind,version])
+  @@index([propertyId,state])
+}
+model DocumentLegalHold {
+  id String @id @default(cuid())
+  propertyId String
+  documentId String
+  reason String
+  imposedBy String
+  releasedBy String?
+  releasedAt DateTime?
+  createdAt DateTime @default(now())
+  property Property @relation(fields:[propertyId],references:[id],onDelete:Restrict,onUpdate:NoAction)
+  document Document @relation(fields:[documentId],references:[id],onDelete:Restrict,onUpdate:NoAction)
+  imposedByUser User @relation("HoldCreator",fields:[imposedBy],references:[id],onDelete:Restrict,onUpdate:NoAction)
+  releasedByUser User? @relation("HoldReleaser",fields:[releasedBy],references:[id],onDelete:Restrict,onUpdate:NoAction)
+  @@index([documentId,releasedAt])
+}
+model DocumentDeletion {
+  id String @id @default(cuid())
+  propertyId String
+  documentId String @unique
+  policyId String
+  requestedBy String
+  approvedBy String?
+  reason String
+  state String @default("REQUESTED")
+  approvedAt DateTime?
+  completedAt DateTime?
+  lastError String?
+  createdAt DateTime @default(now())
+  property Property @relation(fields:[propertyId],references:[id],onDelete:Restrict,onUpdate:NoAction)
+  document Document @relation(fields:[documentId],references:[id],onDelete:Restrict,onUpdate:NoAction)
+  policy RetentionPolicy @relation(fields:[policyId],references:[id],onDelete:Restrict,onUpdate:NoAction)
+  requestedByUser User @relation("DeletionRequester",fields:[requestedBy],references:[id],onDelete:Restrict,onUpdate:NoAction)
+  approvedByUser User? @relation("DeletionApprover",fields:[approvedBy],references:[id],onDelete:Restrict,onUpdate:NoAction)
+  @@index([propertyId,state])
+}
+
+model PaymentEvidence {
+  id String @id @default(cuid())
+  paymentId String @unique
+  propertyId String
+  paymentDate DateTime
+  bankName String?
+  accountLast4 String?
+  assignedReviewerId String?
+  recordedBy String
+  updatedAt DateTime @updatedAt
+  payment Payment @relation(fields:[paymentId],references:[id],onDelete:Restrict,onUpdate:NoAction)
+  property Property @relation(fields:[propertyId],references:[id],onDelete:Restrict,onUpdate:NoAction)
+  recordedByUser User @relation("EvidenceRecorder",fields:[recordedBy],references:[id],onDelete:Restrict,onUpdate:NoAction)
+  assignedReviewer User? @relation("EvidenceReviewer",fields:[assignedReviewerId],references:[id],onDelete:Restrict,onUpdate:NoAction)
+}
+model PaymentDispute {
+  id String @id @default(cuid())
+  paymentId String
+  propertyId String
+  userId String
+  reason String
+  state String @default("OPEN")
+  reviewedBy String?
+  resolution String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  payment Payment @relation(fields:[paymentId],references:[id],onDelete:Restrict,onUpdate:NoAction)
+  property Property @relation(fields:[propertyId],references:[id],onDelete:Restrict,onUpdate:NoAction)
+  user User @relation("DisputeCreator",fields:[userId],references:[id],onDelete:Restrict,onUpdate:NoAction)
+  reviewedByUser User? @relation("DisputeReviewer",fields:[reviewedBy],references:[id],onDelete:Restrict,onUpdate:NoAction)
+  events PaymentDisputeEvent[]
+}
+model PaymentDisputeEvent {
+  id String @id @default(cuid())
+  disputeId String
+  actorId String
+  state String
+  reason String
+  createdAt DateTime @default(now())
+  dispute PaymentDispute @relation(fields:[disputeId],references:[id],onDelete:Restrict,onUpdate:NoAction)
+  actor User @relation("DisputeActor",fields:[actorId],references:[id],onDelete:Restrict,onUpdate:NoAction)
+}
+model ApplicationReviewNote {
+  id String @id @default(cuid())
+  applicationId String
+  propertyId String
+  actorId String
+  body String
+  kind String @default("NOTE")
+  createdAt DateTime @default(now())
+  application Application @relation(fields:[applicationId],references:[id],onDelete:Restrict,onUpdate:NoAction)
+  property Property @relation(fields:[propertyId],references:[id],onDelete:Restrict,onUpdate:NoAction)
+  actor User @relation(fields:[actorId],references:[id],onDelete:Restrict,onUpdate:NoAction)
+  @@index([applicationId,createdAt])
 }

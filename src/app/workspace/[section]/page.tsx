@@ -4,7 +4,12 @@ import { activity } from "../../../lib/activity";
 import { PrivacyAdmin } from "../../../components/privacy-admin";
 import { ReportPanel } from "../../../components/report-panel";
 import { ApiKeyForm } from "../../../components/api-key-form";
+import { InvitationPanel } from "../../../components/invitation-panel";
+import { AdmissionsReview } from "../../../components/admissions-review";
+import { PaymentEvidence } from "../../../components/payment-evidence";
+import { RetentionPanel } from "../../../components/retention-panel";
 import Link from "next/link";
+import type { CSSProperties } from "react";
 import { redirect } from "next/navigation";
 import {
   ArrowUpRight,
@@ -43,6 +48,7 @@ export default async function Workspace({
     u.memberships.flatMap((m) => rolePermissions[m.role] || []),
   );
   const menu = navItems.filter((n) => capabilities.has(n.cap));
+  if (!menu.length) redirect("/portal");
   if (section === "overview" && !capabilities.has("reports"))
     redirect(`/workspace/${menu[0]?.key || "overview"}`);
   const item = navItems.find((n) => n.key === section);
@@ -53,10 +59,36 @@ export default async function Workspace({
     .map((m) => m.propertyId);
   const properties = await db.property.findMany({
       where: { id: { in: permittedProperties } },
+      include: {
+        organisation: { select: { id: true, name: true, branding: true } },
+      },
       orderBy: { name: "asc" },
     }),
     selected = properties.find((p) => p.id === q.property) || properties[0];
   if (!selected) redirect("/portal");
+  const brand = selected.organisation.branding as {
+    displayName?: string;
+    primaryColour?: string;
+  };
+  const brandName =
+    brand.displayName ||
+    (selected.organisation.id !== "mipf"
+      ? selected.organisation.name
+      : undefined);
+  const colour = /^#[a-f0-9]{6}$/i.test(brand.primaryColour || "")
+    ? brand.primaryColour
+    : undefined;
+  // A custom button colour must retain readable white text.
+  const luminance = colour
+    ? [1, 3, 5]
+        .map((i) => parseInt(colour.slice(i, i + 2), 16) / 255)
+        .map((n) => (n <= 0.04045 ? n / 12.92 : ((n + 0.055) / 1.055) ** 2.4))
+        .reduce((sum, n, i) => sum + n * [0.2126, 0.7152, 0.0722][i], 0)
+    : 0;
+  const theme =
+    colour && 1.05 / (luminance + 0.05) >= 4.5
+      ? ({ "--green": colour } as CSSProperties)
+      : undefined;
   const p = selected.id,
     next = `/workspace/${section}`,
     needle = (q.search || "").slice(0, 80),
@@ -92,7 +124,14 @@ export default async function Workspace({
       ? await db.membership.findMany({
           where: {
             propertyId: p,
-            role: { in: ["ADMIN", "CARETAKER", "PROPERTY_MANAGER"] },
+            role: {
+              in: [
+                "ADMIN",
+                "CARETAKER",
+                "MAINTENANCE_OFFICER",
+                "PROPERTY_MANAGER",
+              ],
+            },
           },
           include: { user: true },
         })
@@ -130,9 +169,15 @@ export default async function Workspace({
     }),
   ]);
   return (
-    <div className="app-shell">
+    <div className="app-shell" style={theme}>
       <aside className="sidebar">
-        <Brand />
+        <Brand displayName={brandName} />
+        <Link
+          className="button secondary small-button"
+          href="/workspace/organisations"
+        >
+          Organisation settings
+        </Link>
         <div className="sidebar-label">PROPERTY WORKSPACE</div>
         <div className="property-switch">
           <Building2 size={18} />
@@ -981,6 +1026,7 @@ export default async function Workspace({
                   </p>
                   {t.messages.map((m) => (
                     <p className="ticket-message" key={m.id}>
+                      {m.internal && <strong>Internal staff note · </strong>}
                       {m.body}
                       {m.documentId && (
                         <a
@@ -1040,6 +1086,25 @@ export default async function Workspace({
                       </button>
                     </div>
                   </ActionForm>
+                  <details>
+                    <summary>Add an internal staff note</summary>
+                    <ActionForm action="ticket.update" next={next} id={t.id}>
+                      <input type="hidden" name="status" value={t.status} />
+                      <input type="hidden" name="internal" value="on" />
+                      <label>
+                        Internal note
+                        <textarea
+                          name="body"
+                          required
+                          minLength={2}
+                          maxLength={5000}
+                        />
+                      </label>
+                      <button className="button secondary">
+                        Save internal note
+                      </button>
+                    </ActionForm>
+                  </details>
                 </div>
               ))}
             </section>
@@ -1106,10 +1171,45 @@ export default async function Workspace({
               </section>
             </>
           )}
+          {section === "admissions" && (
+            <AdmissionsReview
+              actor={u}
+              propertyId={p}
+              page={Math.max(1, parseInt(q.reviewPage || "1") || 1)}
+              search={q.reviewSearch || ""}
+              status={q.reviewStatus || "ALL"}
+              assignedTo={q.reviewAssigned || ""}
+              noteApplicationId={q.reviewNoteApp}
+              notePage={Math.max(1, parseInt(q.reviewNotePage || "1") || 1)}
+            />
+          )}
+          {section === "finance" && (
+            <PaymentEvidence
+              actor={u}
+              propertyId={p}
+              page={Math.max(
+                1,
+                Math.min(10000, parseInt(q.evidencePage || "1") || 1),
+              )}
+            />
+          )}
           {section === "settings" && (
             <>
               <Settings propertyId={p} next={next} />
-              <PrivacyAdmin actor={u} />
+              <InvitationPanel
+                propertyId={p}
+                roles={Object.keys(rolePermissions)}
+              />
+              <RetentionPanel
+                actor={u}
+                propertyId={p}
+                after={q.retentionAfter}
+                historyPage={Math.max(
+                  1,
+                  Math.min(100000, parseInt(q.retentionPage || "1") || 1),
+                )}
+              />
+              <PrivacyAdmin actor={u} propertyId={p} />
             </>
           )}
           {!["overview", "integrations", "settings", "reports"].includes(

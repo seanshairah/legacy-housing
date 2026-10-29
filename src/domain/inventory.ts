@@ -46,17 +46,38 @@ export async function reserve(actor: Actor, input: unknown) {
       termsVersion: z.string().min(1),
       tenancyTermsHash: z.string().optional(),
       expectedPriceMinor: z.string().regex(/^\d+$/).optional(),
+      idempotencyKey: z.string().min(12).max(120).optional(),
     })
     .parse(input);
   datesSchema.parse(data);
   if (data.termsVersion !== APPLICATION_POLICY_VERSION)
     throw new Error("POLICY_VERSION_MISMATCH");
-  if (data.startAt.getTime() < Date.now() - 86400000)
-    throw new Error("START_DATE_IN_PAST");
   return transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${actor.id}, 0))`;
     const user = await tx.user.findUniqueOrThrow({ where: { id: actor.id } });
+    if (!user.active) throw new Error("UNAUTHENTICATED");
     if (!user.emailVerifiedAt || !user.phoneVerifiedAt)
       throw new Error("VERIFY_EMAIL_AND_PHONE");
+    if (data.idempotencyKey) {
+      const previous = await tx.reservation.findUnique({
+        where: { idempotencyKey: data.idempotencyKey },
+        include: { application: true },
+      });
+      if (previous) {
+        if (
+          previous.userId !== actor.id ||
+          previous.bedId !== data.bedId ||
+          previous.startAt.getTime() !== data.startAt.getTime() ||
+          previous.endAt.getTime() !== data.endAt.getTime() ||
+          !previous.application
+        )
+          throw new Error("IDEMPOTENCY_CONFLICT");
+        const { application, ...reservation } = previous;
+        return { application, reservation };
+      }
+    }
+    if (data.startAt.getTime() < Date.now() - 86400000)
+      throw new Error("START_DATE_IN_PAST");
     const bed = await tx.bed.findUniqueOrThrow({
       where: { id: data.bedId },
       include: {
@@ -68,7 +89,17 @@ export async function reserve(actor: Actor, input: unknown) {
       },
     });
     const property = bed.room.floor.building.property;
-    if (!property.published || bed.blocked) throw new Error("BED_UNAVAILABLE");
+    if (
+      !property.published ||
+      bed.blocked ||
+      !(
+        await tx.organisation.findUnique({
+          where: { id: property.organisationId },
+          select: { active: true },
+        })
+      )?.active
+    )
+      throw new Error("BED_UNAVAILABLE");
     await acceptPublishedTenancyConditions(
       tx,
       actor.id,
@@ -122,6 +153,7 @@ export async function reserve(actor: Actor, input: unknown) {
         propertyId: property.id,
         bedId: bed.id,
         applicationId: application.id,
+        idempotencyKey: data.idempotencyKey,
         priceSnapshot,
         startAt: data.startAt,
         endAt: data.endAt,
@@ -213,6 +245,8 @@ export async function reviewApplication(
       include: { documents: true, reservations: true },
     });
     await permit(actor, a.propertyId, "admissions", tx);
+    if (a.assignedReviewerId && a.assignedReviewerId !== actor.id)
+      throw new Error("ASSIGNED_ADMISSIONS_REVIEWER_REQUIRED");
     if (!["SUBMITTED", "DOCUMENTS_PENDING", "IN_REVIEW"].includes(a.status))
       throw new Error("INVALID_APPLICATION_TRANSITION");
     if (!reason.trim()) throw new Error("REASON_REQUIRED");
@@ -375,91 +409,134 @@ export async function reselectBed(
 
 export async function offerWaitlist() {
   const { db } = await import("../lib/db");
-  const entries = await db.waitlist.findMany({
-    where: { state: "WAITING" },
-    orderBy: [{ priority: "desc" }, { createdAt: "asc" }],
-    take: 50,
-  });
   let offers = 0;
-  for (const entry of entries) {
-    try {
-      const offered = await transaction(async (tx) => {
-        const e = await tx.waitlist.findUniqueOrThrow({
-          where: { id: entry.id },
-          include: { property: true, user: true },
-        });
-        if (
-          e.state !== "WAITING" ||
-          !e.user.emailVerifiedAt ||
-          !e.user.phoneVerifiedAt ||
-          e.endAt <= new Date()
-        )
-          return false;
-        if (
-          await tx.application.count({
-            where: {
-              userId: e.userId,
-              propertyId: e.propertyId,
-              status: { notIn: ["DECLINED", "WITHDRAWN", "ENDED"] },
-            },
-          })
-        )
-          return false;
-        const candidates = await tx.bed.findMany({
-          where: {
-            blocked: false,
-            room: { floor: { building: { propertyId: e.propertyId } } },
-          },
-          take: 100,
-          orderBy: { id: "asc" },
-        });
-        for (const bed of candidates) {
-          await tx.$queryRaw`SELECT id FROM "Bed" WHERE id=${bed.id} FOR UPDATE`;
+  let cursor: { priority: number; createdAt: Date; id: string } | undefined;
+  // Keyset pages preserve priority/FIFO order even as earlier entries leave WAITING.
+  // A full property must not monopolise the first page on every worker cycle.
+  while (true) {
+    const entries = await db.waitlist.findMany({
+      where: {
+        state: "WAITING",
+        ...(cursor
+          ? {
+              OR: [
+                { priority: { lt: cursor.priority } },
+                {
+                  priority: cursor.priority,
+                  createdAt: { gt: cursor.createdAt },
+                },
+                {
+                  priority: cursor.priority,
+                  createdAt: cursor.createdAt,
+                  id: { gt: cursor.id },
+                },
+              ],
+            }
+          : {}),
+      },
+      orderBy: [{ priority: "desc" }, { createdAt: "asc" }, { id: "asc" }],
+      take: 50,
+    });
+    for (const entry of entries) {
+      try {
+        const offered = await transaction(async (tx) => {
+          const e = await tx.waitlist.findUniqueOrThrow({
+            where: { id: entry.id },
+            include: { property: true, user: true },
+          });
           if (
-            await tx.reservation.count({
+            e.state !== "WAITING" ||
+            !e.property.published ||
+            !e.user.active ||
+            !e.user.emailVerifiedAt ||
+            !e.user.phoneVerifiedAt ||
+            e.endAt <= new Date()
+          )
+            return false;
+          if (
+            await tx.application.count({
               where: {
-                bedId: bed.id,
-                state: { in: ["HOLD", "CONFIRMED", "ACTIVE", "BLOCKED"] },
-                startAt: { lt: e.endAt },
-                endAt: { gt: e.startAt },
+                userId: e.userId,
+                propertyId: e.propertyId,
+                status: { notIn: ["DECLINED", "WITHDRAWN", "ENDED"] },
               },
             })
           )
-            continue;
-          const hold = await tx.reservation.create({
-            data: {
-              userId: e.userId,
-              propertyId: e.propertyId,
-              bedId: bed.id,
-              priceSnapshot: priceJson(
-                await quoteBed(tx, bed.id, e.startAt, e.endAt),
-              ),
-              startAt: e.startAt,
-              endAt: e.endAt,
-              expiresAt: new Date(Date.now() + e.property.holdMinutes * 60000),
+            return false;
+          const candidates = await tx.bed.findMany({
+            where: {
+              blocked: false,
+              room: { floor: { building: { propertyId: e.propertyId } } },
+              // Filter occupied beds before applying the page bound. Recheck after
+              // locking below because a concurrent reservation can win meanwhile.
+              reservations: {
+                none: {
+                  state: { in: ["HOLD", "CONFIRMED", "ACTIVE", "BLOCKED"] },
+                  startAt: { lt: e.endAt },
+                  endAt: { gt: e.startAt },
+                },
+              },
             },
+            take: 100,
+            orderBy: { id: "asc" },
           });
-          await tx.waitlist.update({
-            where: { id: e.id },
-            data: { state: "OFFERED", offeredReservationId: hold.id },
-          });
-          await event(
-            tx,
-            "waitlist-worker",
-            e.propertyId,
-            "waitlist.offered",
-            hold.id,
-            { expiresAt: hold.expiresAt!.toISOString() },
-            e.userId,
-          );
-          return true;
-        }
-        return false;
-      });
-      if (offered) offers++;
-    } catch {
-      /* Another worker or concurrent booking won; the next cycle retries the waiting entry. */
+          for (const bed of candidates) {
+            await tx.$queryRaw`SELECT id FROM "Bed" WHERE id=${bed.id} FOR UPDATE`;
+            if (
+              await tx.reservation.count({
+                where: {
+                  bedId: bed.id,
+                  state: { in: ["HOLD", "CONFIRMED", "ACTIVE", "BLOCKED"] },
+                  startAt: { lt: e.endAt },
+                  endAt: { gt: e.startAt },
+                },
+              })
+            )
+              continue;
+            const hold = await tx.reservation.create({
+              data: {
+                userId: e.userId,
+                propertyId: e.propertyId,
+                bedId: bed.id,
+                priceSnapshot: priceJson(
+                  await quoteBed(tx, bed.id, e.startAt, e.endAt),
+                ),
+                startAt: e.startAt,
+                endAt: e.endAt,
+                expiresAt: new Date(
+                  Date.now() + e.property.holdMinutes * 60000,
+                ),
+              },
+            });
+            await tx.waitlist.update({
+              where: { id: e.id },
+              data: { state: "OFFERED", offeredReservationId: hold.id },
+            });
+            await event(
+              tx,
+              "waitlist-worker",
+              e.propertyId,
+              "waitlist.offered",
+              hold.id,
+              { expiresAt: hold.expiresAt!.toISOString() },
+              e.userId,
+            );
+            return true;
+          }
+          return false;
+        });
+        if (offered) offers++;
+      } catch {
+        /* Another worker or concurrent booking won; the next cycle retries the waiting entry. */
+      }
     }
+    if (entries.length < 50) break;
+    const last = entries.at(-1)!;
+    cursor = {
+      priority: last.priority,
+      createdAt: last.createdAt,
+      id: last.id,
+    };
   }
   return offers;
 }

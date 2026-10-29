@@ -50,10 +50,33 @@ jobs:
       - run: npm run lint
       - run: npm run format:check
       - run: npm audit --audit-level=high
-      - run: npm test
+      - run: npm test -- --coverage
       - run: npm run build
+      - name: Prepare isolated browser database
+        run: |
+          docker exec ${{ job.services.postgres.id }} createdb -U postgres legacy_test_browser
+          DATABASE_URL=postgresql://postgres:postgres@localhost:5432/legacy_test_browser npm run db:deploy
       - name: Browser and accessibility journeys
-        run: npx playwright install --with-deps chromium && LEGACY_E2E_PRODUCTION=true CHROMIUM_PATH="$(find "$HOME/.cache/ms-playwright" -name chrome -type f | head -1)" npm run test:e2e
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/legacy_test_browser
+          LEGACY_FULL_E2E: "true"
+          LEGACY_E2E_PRODUCTION: "true"
+        run: |
+          npx playwright install --with-deps chromium
+          CHROMIUM_PATH="$(find "$HOME/.cache/ms-playwright" -name chrome -type f | head -1)" npm run test:e2e
+      - name: Consistent encrypted backup and recovery drill
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/legacy_test_recovery
+          BACKUP_DOCKER_CONTAINER: ${{ job.services.postgres.id }}
+        run: node --import tsx scripts/verify-recovery.ts
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: verification-reports
+          path: |
+            coverage/coverage-summary.json
+            playwright-report/
+            .data/recovery-evidence-*.json
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

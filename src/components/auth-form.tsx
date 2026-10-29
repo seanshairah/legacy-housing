@@ -1,55 +1,94 @@
 "use client";
 import { useState } from "react";
+const modes: Record<string, { tab: string; title: string; submit: string }> = {
+  login: { tab: "Sign in", title: "Welcome home.", submit: "Sign in" },
+  register: {
+    tab: "Register",
+    title: "Make room for more.",
+    submit: "Create account",
+  },
+  verify: {
+    tab: "Verify",
+    title: "Verify your account.",
+    submit: "Verify code",
+  },
+  forgot: {
+    tab: "Recover",
+    title: "Recover access.",
+    submit: "Request recovery",
+  },
+  enroll: {
+    tab: "MFA",
+    title: "Secure your account.",
+    submit: "Set up authenticator",
+  },
+  "mfa-recover": {
+    tab: "Lost authenticator",
+    title: "Recover your authenticator.",
+    submit: "Recover authenticator",
+  },
+  "recovery-codes": {
+    tab: "Recovery codes",
+    title: "Replace recovery codes.",
+    submit: "Replace recovery codes",
+  },
+  "invitation.accept": {
+    tab: "Accept invitation",
+    title: "Join your property team.",
+    submit: "Accept staff invitation",
+  },
+};
 export function AuthForm() {
   const [mode, setMode] = useState("login"),
     [message, setMessage] = useState(""),
     [secret, setSecret] = useState(""),
+    [recoveryCodes, setRecoveryCodes] = useState<string[]>([]),
     [busy, setBusy] = useState(false);
   return (
     <div className="auth-panel">
       <div className="eyebrow">YOUR LEGACY STARTS HERE</div>
-      <h1>
-        {
-          (
-            {
-              login: "Welcome home.",
-              register: "Make room for more.",
-              verify: "Verify your account.",
-              forgot: "Recover access.",
-              enroll: "Secure your account.",
-            } as Record<string, string>
-          )[mode]
-        }
-      </h1>
+      <h1>{modes[mode].title}</h1>
       <p className="muted">
         One account for your application, home, and everything in between.
       </p>
       <div className="tabs">
-        {["login", "register", "verify", "forgot", "enroll"].map((m) => (
+        {Object.entries(modes).map(([value, details]) => (
           <button
             type="button"
-            key={m}
-            className={m === mode ? "active" : ""}
+            key={value}
+            className={value === mode ? "active" : ""}
+            disabled={busy}
             onClick={() => {
-              setMode(m);
+              setMode(value);
               setMessage("");
               setSecret("");
+              setRecoveryCodes([]);
             }}
           >
-            {
-              (
-                {
-                  login: "Sign in",
-                  register: "Register",
-                  verify: "Verify",
-                  forgot: "Recover",
-                  enroll: "MFA",
-                } as Record<string, string>
-              )[m]
-            }
+            {details.tab}
           </button>
         ))}
       </div>
+      {mode === "mfa-recover" && (
+        <p className="notice">
+          Use your password and one saved recovery code. This ends every session
+          and removes the lost authenticator. Staff must enroll a new
+          authenticator before signing in.
+        </p>
+      )}
+      {mode === "recovery-codes" && (
+        <p className="notice">
+          Enter your password and current authenticator code. Replacing recovery
+          codes invalidates all previous codes and ends every session.
+        </p>
+      )}
+      {mode === "invitation.accept" && (
+        <p className="notice">
+          Register your own account, verify both contacts and set up MFA first.
+          Use the invitation supplied by your property administrator. Acceptance
+          requires your password and current authenticator code.
+        </p>
+      )}
       <form
         method="post"
         action="/api/auth"
@@ -57,29 +96,30 @@ export function AuthForm() {
           e.preventDefault();
           setBusy(true);
           setMessage("");
-          const d = Object.fromEntries(new FormData(e.currentTarget));
+          const data = Object.fromEntries(new FormData(e.currentTarget));
           try {
-            const r = await fetch("/api/auth", {
+            const response = await fetch("/api/auth", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
-                ...d,
+                ...data,
                 action: mode === "enroll" && secret ? "confirm" : mode,
               }),
             });
-            const result = await r.json();
+            const result = await response.json();
             if (result.redirect) window.location.assign(result.redirect);
             else if (result.secret) {
               setSecret(result.secret);
               setMessage(
                 "Add this secret to your authenticator, then enter its six-digit code.",
               );
+            } else if (Array.isArray(result.recoveryCodes)) {
+              setRecoveryCodes(result.recoveryCodes);
+              setSecret("");
+              setMode("login");
+              setMessage(result.message);
             } else
-              setMessage(
-                result.error ||
-                  result.message ||
-                  "Authenticator confirmed. Sign in with its code.",
-              );
+              setMessage(result.error || result.message || "Request complete.");
           } catch {
             setMessage("Connection failed. Please try again.");
           } finally {
@@ -158,13 +198,40 @@ export function AuthForm() {
             </label>
           </>
         )}
+        {mode === "invitation.accept" && (
+          <label>
+            Staff invitation code
+            <input
+              name="token"
+              required
+              minLength={30}
+              maxLength={100}
+              autoComplete="off"
+            />
+          </label>
+        )}
+        {mode === "mfa-recover" && (
+          <label>
+            Saved authenticator recovery code
+            <input
+              name="recoveryCode"
+              required
+              maxLength={40}
+              placeholder="xxxxxxxx-xxxxxxxx-xxxxxxxx-xxxxxxxx"
+              autoComplete="off"
+            />
+          </label>
+        )}
         {secret && (
           <div className="notice">
             Authenticator secret <code className="secret">{secret}</code>Store
             it only in your authenticator.
           </div>
         )}
-        {(mode === "login" || !!secret) && (
+        {(mode === "login" ||
+          mode === "recovery-codes" ||
+          mode === "invitation.accept" ||
+          !!secret) && (
           <label>
             Authenticator code{" "}
             <span className="muted">
@@ -175,6 +242,11 @@ export function AuthForm() {
               inputMode="numeric"
               pattern="[0-9]{6}"
               autoComplete="one-time-code"
+              required={
+                mode === "recovery-codes" ||
+                mode === "invitation.accept" ||
+                !!secret
+              }
             />
           </label>
         )}
@@ -183,20 +255,29 @@ export function AuthForm() {
             {message}
           </p>
         )}
+        {recoveryCodes.length > 0 && (
+          <div className="notice" aria-label="New authenticator recovery codes">
+            <strong>Save these recovery codes now.</strong>
+            <p>
+              They are shown only once. Keep them in a secure password manager
+              or offline. Each code expires after one year and can be used once.
+              Leaving this tab hides them.
+            </p>
+            <ul>
+              {recoveryCodes.map((code) => (
+                <li key={code}>
+                  <code>{code}</code>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         <button disabled={busy} className="button full">
           {busy
             ? "Please wait…"
             : mode === "enroll" && secret
               ? "Confirm authenticator"
-              : mode === "enroll"
-                ? "Set up authenticator"
-                : mode === "register"
-                  ? "Create account"
-                  : mode === "verify"
-                    ? "Verify code"
-                    : mode === "forgot"
-                      ? "Request recovery"
-                      : "Sign in"}{" "}
+              : modes[mode].submit}{" "}
           <span>↗</span>
         </button>
       </form>

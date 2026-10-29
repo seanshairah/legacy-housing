@@ -1,14 +1,25 @@
 import { db } from "../lib/db";
-import { type Actor, permitClientAdmin } from "../domain/access";
+import { type Actor } from "../domain/access";
+import {
+  permitOrganisation,
+  organisationForProperty,
+} from "../domain/organisations";
 import { ActionForm, Badge } from "./ui";
-export async function PrivacyAdmin({ actor }: { actor: Actor }) {
+export async function PrivacyAdmin({
+  actor,
+  propertyId,
+}: {
+  actor: Actor;
+  propertyId: string;
+}) {
+  const organisationId = await organisationForProperty(propertyId);
   try {
-    await permitClientAdmin(actor);
+    await permitOrganisation(actor, organisationId, "admin");
   } catch {
     return null;
   }
   const requests = await db.privacyRequest.findMany({
-    where: { state: { not: "FULFILLED" } },
+    where: { organisationId, state: { not: "FULFILLED" } },
     orderBy: { createdAt: "desc" },
     take: 50,
   });
@@ -16,9 +27,9 @@ export async function PrivacyAdmin({ actor }: { actor: Actor }) {
     <section className="panel">
       <h2>Client privacy request review</h2>
       <p className="muted">
-        Restricted to administrators granted every property in this dedicated
-        client database. Erasure requires a lawful retention/legal-hold
-        decision; this interface does not falsely mark data deleted.
+        Restricted to this organisation's administrators. Erasure requires a
+        lawful retention/legal-hold decision; this interface does not falsely
+        mark data deleted.
       </p>
       {requests.map((r) => (
         <div key={r.id} className="record-card">

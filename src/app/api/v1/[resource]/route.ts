@@ -141,6 +141,29 @@ export async function GET(
             amountMinor: true,
             currency: true,
             createdAt: true,
+            evidence: {
+              select: {
+                paymentDate: true,
+                bankName: true,
+                accountLast4: true,
+                updatedAt: true,
+              },
+            },
+            disputes: {
+              select: {
+                id: true,
+                reason: true,
+                state: true,
+                resolution: true,
+                createdAt: true,
+                updatedAt: true,
+                events: {
+                  select: { state: true, reason: true, createdAt: true },
+                  orderBy: { createdAt: "asc" },
+                },
+              },
+              orderBy: { createdAt: "asc" },
+            },
           },
         }),
         leases: await db.lease.findMany({
@@ -156,7 +179,7 @@ export async function GET(
         consents: await db.consent.findMany({ where: { userId: actor.id } }),
         tickets: await db.ticket.findMany({
           where: { userId: actor.id },
-          include: { messages: true },
+          include: { messages: { where: { internal: false } } },
         }),
       };
       await transaction(async (tx) => {
@@ -428,7 +451,7 @@ export async function POST(
     return json(
       {
         error:
-          error instanceof Error && /^[A-Z_]+$/.test(error.message)
+          error instanceof Error && /^[A-Z][A-Z0-9_]+$/.test(error.message)
             ? error.message
             : "COMMAND_REJECTED",
       },

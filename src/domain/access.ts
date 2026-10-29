@@ -1,5 +1,6 @@
 import { securitySignal } from "../lib/security-monitor";
 import { db, type Tx } from "../lib/db";
+import { organisationForProperty } from "./organisations";
 export type Actor = {
   id: string;
   apiPropertyId?: string;
@@ -23,6 +24,10 @@ export const rolePermissions: Record<string, readonly string[]> = {
   FINANCE: ["finance", "finance.read"],
   PROPERTY_MANAGER: ["inventory", "operations", "reports", "leases"],
   CARETAKER: ["operations"],
+  MAINTENANCE_OFFICER: ["operations"],
+  LEASING_OFFICER: ["leases"],
+  FINANCE_APPROVER: ["finance", "finance.read"],
+  PLATFORM_OPERATOR: [],
   KYC: ["kyc"],
   MEDICAL_REVIEWER: ["medical"],
   AUDITOR: ["finance.read", "reports", "audit"],
@@ -33,6 +38,7 @@ export async function permit(
   capability: string,
   client: Tx | typeof db = db,
 ) {
+  await organisationForProperty(propertyId, client);
   if (
     actor.apiPropertyId &&
     (actor.apiPropertyId !== propertyId ||
@@ -71,6 +77,12 @@ export async function ownerOrPermit(
   capability: string,
   client: Tx | typeof db = db,
 ) {
+  await organisationForProperty(propertyId, client);
+  const user = await client.user.findUnique({
+    where: { id: actor.id },
+    select: { active: true },
+  });
+  if (!user?.active) throw new Error("UNAUTHENTICATED");
   if (actor.apiPropertyId || actor.id !== userId)
     await permit(actor, propertyId, capability, client);
 }

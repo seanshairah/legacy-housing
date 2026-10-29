@@ -5,7 +5,7 @@ import { testConnector } from "../integrations";
 import { requestTenancyChange, reviewTenancyChange } from "./tenancy";
 import { z } from "zod";
 import { db, transaction } from "../lib/db";
-import { type Actor, permit, permitClientAdmin } from "./access";
+import { type Actor, permit } from "./access";
 import { event } from "./events";
 import {
   reserve,
@@ -35,15 +35,127 @@ import {
 import { createTicket, updateTicket } from "./operations";
 import { initiatePaynow, reconcilePaynow } from "./paynow";
 import { hash } from "../lib/security";
+import {
+  assignApplication,
+  addApplicationNote,
+  updateReviewStage,
+} from "./admissions";
+import {
+  recordPaymentEvidence,
+  assignPaymentReviewer,
+  openPaymentDispute,
+  reviewPaymentDispute,
+} from "./payment-evidence";
+import {
+  createOrganisation,
+  updateOrganisation,
+  configureOrganisationPaynow,
+  grantOrganisationMembership,
+  revokeOrganisationMembership,
+  permitOrganisation,
+} from "./organisations";
+import {
+  proposeRetentionPolicy,
+  approveRetentionPolicy,
+  retentionDryRun,
+  requestDocumentDeletion,
+  approveDocumentDeletion,
+  executeDocumentDeletion,
+  imposeDocumentHold,
+  releaseDocumentHold,
+} from "./retention";
 const text = (v: unknown) => z.string().trim().min(1).max(5000).parse(v);
 export async function command(
   actor: Actor,
   action: string,
   d: Record<string, unknown>,
 ) {
+  if (
+    !(
+      await db.user.findUnique({
+        where: { id: actor.id },
+        select: { active: true },
+      })
+    )?.active
+  )
+    throw new Error("UNAUTHENTICATED");
   const id = () => text(d.id),
     reason = () => text(d.reason);
   switch (action) {
+    case "admissions.assign":
+      return assignApplication(actor, id(), d);
+    case "admissions.note":
+      return addApplicationNote(actor, id(), d);
+    case "admissions.stage":
+      return updateReviewStage(actor, id(), d);
+    case "evidence.update":
+      return recordPaymentEvidence(actor, d);
+    case "evidence.assign":
+      return assignPaymentReviewer(actor, d);
+    case "payment.dispute":
+      return openPaymentDispute(actor, d);
+    case "payment.dispute.review":
+      return reviewPaymentDispute(actor, d);
+    case "organisation.create":
+      return createOrganisation(actor, d);
+    case "organisation.update":
+      return updateOrganisation(actor, text(d.organisationId), {
+        name: d.name,
+        legalEntity: d.legalEntity,
+        residencyRegion: d.residencyRegion,
+        branding: {
+          displayName: d.displayName,
+          primaryColour: d.primaryColour,
+          ...(d.supportEmail ? { supportEmail: d.supportEmail } : {}),
+        },
+        retentionPolicy: {
+          policyReference: d.policyReference,
+          noticeVersion: d.noticeVersion,
+        },
+      });
+    case "organisation.payment":
+      return configureOrganisationPaynow(actor, text(d.organisationId), {
+        mode: d.mode,
+        ...(d.integrationKey
+          ? {
+              credentials: {
+                integrationId: d.integrationId,
+                integrationKey: d.integrationKey,
+                currency: d.currency,
+              },
+            }
+          : {}),
+      });
+    case "organisation.membership":
+      return grantOrganisationMembership(
+        actor,
+        text(d.organisationId),
+        text(d.userId),
+        z.enum(["ADMIN", "MEMBER"]).parse(d.role),
+      );
+    case "organisation.membership.revoke":
+      return revokeOrganisationMembership(actor, id(), reason());
+    case "retention.policy":
+      return proposeRetentionPolicy(actor, d);
+    case "retention.policy.approve":
+      return approveRetentionPolicy(actor, id(), reason());
+    case "retention.preview":
+      return retentionDryRun(
+        actor,
+        text(d.propertyId),
+        100,
+        typeof d.after === "string" ? d.after : undefined,
+      );
+    case "retention.request":
+      return requestDocumentDeletion(actor, text(d.documentId), reason());
+    case "retention.approve":
+      return approveDocumentDeletion(actor, id(), reason());
+    case "retention.execute":
+      return executeDocumentDeletion(actor, id());
+    case "retention.hold":
+      return imposeDocumentHold(actor, d);
+    case "retention.hold.release":
+      return releaseDocumentHold(actor, id(), reason());
     case "tenancy.request":
       return requestTenancyChange(actor, d);
     case "tenancy.review":
@@ -72,10 +184,10 @@ export async function command(
       });
     case "privacy.review":
       return transaction(async (tx) => {
-        await permitClientAdmin(actor, tx);
         const r = await tx.privacyRequest.findUniqueOrThrow({
           where: { id: id() },
         });
+        await permitOrganisation(actor, r.organisationId, "admin", tx);
         const state = z
           .enum(["IN_REVIEW", "ON_HOLD", "DECLINED"])
           .parse(d.state);
@@ -89,7 +201,7 @@ export async function command(
           null,
           "privacy.reviewed",
           r.id,
-          { state, reason: reason() },
+          { state, reason: reason(), organisationId: r.organisationId },
           r.userId,
         );
       });
@@ -104,10 +216,11 @@ export async function command(
           currency: z.enum(["USD", "ZWG"]),
           deposit: z.string(),
           holdMinutes: z.coerce.number().int().min(5).max(1440),
+          organisationId: z.string().min(1).default("mipf"),
         })
         .parse(d);
       return transaction(async (tx) => {
-        await permitClientAdmin(actor, tx);
+        await permitOrganisation(actor, data.organisationId, "admin", tx);
         const { deposit, ...fields } = data;
         const p = await tx.property.create({
           data: { ...fields, depositMinor: minor(deposit) },
@@ -147,9 +260,21 @@ export async function command(
       });
     case "privacy.request":
       return transaction(async (tx) => {
+        const organisationId =
+          typeof d.organisationId === "string" && d.organisationId
+            ? text(d.organisationId)
+            : "mipf";
+        // Legacy self-registration creates an identity before an application.
+        // Such users retain access to their own MIPF privacy request workflow.
+        if (
+          organisationId !== "mipf" ||
+          (await tx.application.count({ where: { userId: actor.id } }))
+        )
+          await permitOrganisation(actor, organisationId, "member", tx);
         const request = await tx.privacyRequest.create({
           data: {
             userId: actor.id,
+            organisationId,
             type: z
               .enum(["ACCESS", "EXPORT", "CORRECTION", "ERASURE"])
               .parse(d.type),
@@ -158,6 +283,7 @@ export async function command(
         });
         await event(tx, actor.id, null, "privacy.requested", request.id, {
           type: request.type,
+          organisationId,
         });
         return request;
       });
@@ -189,7 +315,8 @@ export async function command(
         actor,
         id(),
         d.consent === true || d.consent === "on",
-        text(d.tenancyTermsHash) || undefined,
+        z.string().trim().max(64).optional().parse(d.tenancyTermsHash) ||
+          undefined,
       );
     case "waitlist":
       return joinWaitlist(actor, d);
@@ -434,6 +561,10 @@ export async function command(
             "KYC",
             "MEDICAL_REVIEWER",
             "AUDITOR",
+            "MAINTENANCE_OFFICER",
+            "LEASING_OFFICER",
+            "FINANCE_APPROVER",
+            "PLATFORM_OPERATOR",
           ]),
         })
         .parse(d);
@@ -443,11 +574,14 @@ export async function command(
           where: { id: data.userId },
         });
         if (!u.mfaConfirmed) throw new Error("STAFF_MUST_ENROLL_MFA_FIRST");
+        if (!u.emailVerifiedAt || !u.phoneVerifiedAt)
+          throw new Error("VERIFIED_CONTACTS_REQUIRED");
         const m = await tx.membership.upsert({
           where: { userId_propertyId_role: data },
           create: data,
           update: {},
         });
+        await tx.session.deleteMany({ where: { userId: u.id } });
         await event(tx, actor.id, data.propertyId, "permission.granted", m.id, {
           role: data.role,
         });

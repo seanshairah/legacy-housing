@@ -1,4 +1,5 @@
 import { hash } from "../../lib/security";
+import { randomUUID } from "node:crypto";
 import { LiveRefresh } from "../../components/live-refresh";
 import { quoteRates } from "../../domain/pricing";
 import Link from "next/link";
@@ -280,6 +281,7 @@ export default async function Rooms({
                                       (user ? (
                                         <ActionForm
                                           action="reserve"
+                                          idempotencyKey={randomUUID()}
                                           next="/portal"
                                           bedId={bed.id}
                                           tenancyTermsHash={

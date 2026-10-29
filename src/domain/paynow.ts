@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { db, transaction } from "../lib/db";
-import { hash } from "../lib/security";
+import { hash, decrypt, encrypt } from "../lib/security";
+import { organisationPaynowConfiguration } from "./organisations";
 import { type Actor, ownerOrPermit } from "./access";
 import { settleProvider, minor, recordProviderRefund } from "./finance";
 import { event } from "./events";
@@ -37,20 +38,44 @@ export function trustedPaynowUrl(raw: string) {
     throw new Error("UNTRUSTED_PROVIDER_URL");
   return u;
 }
-function config() {
-  if (
-    process.env.PAYNOW_MODE !== "live" ||
-    !process.env.PAYNOW_INTEGRATION_ID ||
-    !process.env.PAYNOW_INTEGRATION_KEY
-  )
-    throw new Error("PAYNOW_READY_FOR_CREDENTIALS");
+async function config(propertyId: string, encryptedSnapshot?: string | null) {
+  const organisation = await organisationPaynowConfiguration(propertyId);
+  let credentials: {
+    integrationId: string;
+    integrationKey: string;
+    currency: string;
+  };
+  if (encryptedSnapshot)
+    credentials = JSON.parse(decrypt(encryptedSnapshot).toString());
+  else if (organisation.credentials) {
+    if (organisation.mode !== "live")
+      throw new Error("PAYNOW_READY_FOR_CREDENTIALS");
+    credentials = organisation.credentials;
+  } else {
+    // Compatibility is explicitly limited to the original dedicated client.
+    // A newly provisioned organisation can never inherit another merchant's keys.
+    if (
+      organisation.organisationId !== "mipf" ||
+      process.env.PAYNOW_MODE !== "live" ||
+      !process.env.PAYNOW_INTEGRATION_ID ||
+      !process.env.PAYNOW_INTEGRATION_KEY
+    )
+      throw new Error("PAYNOW_READY_FOR_CREDENTIALS");
+    credentials = {
+      integrationId: process.env.PAYNOW_INTEGRATION_ID,
+      integrationKey: process.env.PAYNOW_INTEGRATION_KEY,
+      currency: process.env.PAYNOW_CURRENCY || "",
+    };
+  }
   const app = new URL(process.env.APP_URL!);
   if (app.protocol !== "https:") throw new Error("PUBLIC_HTTPS_URL_REQUIRED");
-  if (process.env.PAYNOW_CURRENCY !== "USD")
+  if (credentials.currency !== "USD")
     throw new Error("MERCHANT_CURRENCY_MUST_BE_VERIFIED");
   return {
-    id: process.env.PAYNOW_INTEGRATION_ID,
-    key: process.env.PAYNOW_INTEGRATION_KEY,
+    id: credentials.integrationId,
+    key: credentials.integrationKey,
+    currency: credentials.currency,
+    encrypted: encryptedSnapshot || encrypt(JSON.stringify(credentials)),
     app: app.origin,
   };
 }
@@ -67,22 +92,22 @@ async function providerPost(url: URL, fields: Record<string, string>) {
   return Object.fromEntries(new URLSearchParams(text));
 }
 export async function initiatePaynow(actor: Actor, id: string) {
-  const c = config(),
-    p = await db.payment.findUniqueOrThrow({
-      where: { id },
-      include: { user: true },
-    });
+  const p = await db.payment.findUniqueOrThrow({
+    where: { id },
+    include: { user: true },
+  });
   await ownerOrPermit(actor, p.userId, p.propertyId, "finance");
+  const c = await config(p.propertyId, p.providerConfigEncrypted);
   if (
     p.method !== "PAYNOW" ||
     p.status !== "PENDING" ||
-    p.currency !== process.env.PAYNOW_CURRENCY
+    p.currency !== c.currency
   )
     throw new Error("INVALID_PAYMENT");
   if (p.redirectUrl) return trustedPaynowUrl(p.redirectUrl).toString();
   const claim = await db.payment.updateMany({
     where: { id: p.id, status: "PENDING", pollUrl: null },
-    data: { status: "INITIATING" },
+    data: { status: "INITIATING", providerConfigEncrypted: c.encrypted },
   });
   if (claim.count !== 1)
     throw new Error("PRIOR_INITIATION_REQUIRES_RECONCILIATION");
@@ -138,8 +163,8 @@ export async function initiatePaynow(actor: Actor, id: string) {
   }
 }
 export async function reconcilePaynow(id: string) {
-  const c = config(),
-    p = await db.payment.findUniqueOrThrow({ where: { id } });
+  const p = await db.payment.findUniqueOrThrow({ where: { id } }),
+    c = await config(p.propertyId, p.providerConfigEncrypted);
   if (!p.pollUrl) throw new Error("POLL_URL_REQUIRED");
   const result = await providerPost(trustedPaynowUrl(p.pollUrl), {});
   if (
@@ -190,13 +215,14 @@ export async function reconcilePaynow(id: string) {
     );
 }
 export async function callback(fields: Record<string, string>) {
-  const c = config();
-  if (!verifyPaynow(fields, c.key))
-    throw new Error("INVALID_WEBHOOK_SIGNATURE");
   const p = await db.payment.findUnique({
     where: { reference: fields.reference || "" },
   });
   if (!p) throw new Error("UNKNOWN_PAYMENT");
+  if (p.method !== "PAYNOW") throw new Error("INVALID_PAYMENT");
+  const c = await config(p.propertyId, p.providerConfigEncrypted);
+  if (!verifyPaynow(fields, c.key))
+    throw new Error("INVALID_WEBHOOK_SIGNATURE");
   if (
     !fields.paynowreference ||
     (p.providerId && p.providerId !== fields.paynowreference) ||

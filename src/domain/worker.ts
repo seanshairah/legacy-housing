@@ -1,7 +1,13 @@
+import {
+  assertNotificationVersion,
+  notificationTemplate,
+  identityNotification,
+} from "./notification-templates";
+import { operationalLog, operationalErrorCode } from "../lib/logger";
 import { scheduledReminders } from "./scheduler";
 import { billCurrentMonth } from "./tenancy";
-import { db } from "../lib/db";
-import { token, decrypt } from "../lib/security";
+import { db, transaction } from "../lib/db";
+import { token, decrypt, hash } from "../lib/security";
 import { expireHolds, offerWaitlist } from "./inventory";
 import { scanDocument } from "./documents";
 import { reconcilePaynow } from "./paynow";
@@ -24,13 +30,19 @@ export async function workOnce() {
     }
   }
   // Recover abandoned leases; conditional claim prevents duplicate delivery by active workers.
-  await db.outboxEvent.updateMany({
+  const recovered = await db.outboxEvent.updateMany({
     where: {
       state: "PROCESSING",
       lockedAt: { lt: new Date(Date.now() - 5 * 60000) },
     },
     data: { state: "PENDING", lockedAt: null },
   });
+  if (recovered.count)
+    operationalLog("worker.claims_recovered", {
+      count: recovered.count,
+      outcome: "recovered",
+    });
+  let processed = 0;
   const pending = await db.outboxEvent.findMany({
     where: { state: "PENDING", availableAt: { lte: new Date() } },
     take: 25,
@@ -46,8 +58,13 @@ export async function workOnce() {
       },
     });
     if (!claim.count) continue;
+    processed++;
+    const started = Date.now();
     try {
-      if (e.type === "paynow.reconcile")
+      assertNotificationVersion(e.version);
+      if (e.type === "announcement.published" && !e.userId)
+        await fanOutAnnouncement(e);
+      else if (e.type === "paynow.reconcile")
         await reconcilePaynow((e.payload as { paymentId: string }).paymentId);
       else if (
         ["identity.email", "identity.phone", "identity.reset"].includes(e.type)
@@ -56,6 +73,7 @@ export async function workOnce() {
         const raw = decrypt(
           (e.payload as { encrypted: string }).encrypted,
         ).toString();
+        const template = identityNotification(e.type, e.version, raw);
         if (e.type === "identity.phone") {
           if (!process.env.SMSPOP_API_KEY || !process.env.SMSPOP_SENDER_ID)
             throw new Error("SMS_PROVIDER_NOT_CONFIGURED");
@@ -69,7 +87,7 @@ export async function workOnce() {
             body: JSON.stringify({
               sender_id: process.env.SMSPOP_SENDER_ID,
               recipients: [u.phone.replace(/^\+/, "")],
-              message: `Legacy Heights verification: ${raw}`,
+              message: template.sms,
             }),
             signal: AbortSignal.timeout(20000),
             redirect: "error",
@@ -88,8 +106,8 @@ export async function workOnce() {
             body: JSON.stringify({
               from: process.env.EMAIL_FROM,
               to: u.email,
-              subject: "Legacy Heights account verification",
-              text: `Enter this single-use code on the verification page: ${raw}`,
+              subject: template.subject,
+              text: template.email,
             }),
             signal: AbortSignal.timeout(20000),
             redirect: "error",
@@ -97,6 +115,11 @@ export async function workOnce() {
           if (!r.ok) throw new Error("EMAIL_DELIVERY_FAILED");
         }
       } else if (e.userId) {
+        const template = notificationTemplate(
+          e.type,
+          e.version,
+          process.env.APP_URL || "http://localhost:3001",
+        );
         const preference = await db.notificationPreference.findUnique({
           where: { userId: e.userId },
         });
@@ -116,8 +139,8 @@ export async function workOnce() {
             body: JSON.stringify({
               from: process.env.EMAIL_FROM,
               to: u.email,
-              subject: `Legacy Heights: ${e.type.replaceAll(".", " ")}`,
-              text: `Your accommodation record has an update. Sign in at ${process.env.APP_URL}/portal to view details. No private documents are included in this message.`,
+              subject: template.subject,
+              text: template.email,
             }),
             signal: AbortSignal.timeout(20000),
             redirect: "error",
@@ -140,7 +163,7 @@ export async function workOnce() {
             body: JSON.stringify({
               sender_id: process.env.SMSPOP_SENDER_ID,
               recipients: [u.phone.replace(/^\+/, "")],
-              message: `Legacy Heights: ${e.type.replaceAll(".", " ")}. Sign in to your portal for details.`,
+              message: template.sms,
             }),
             signal: AbortSignal.timeout(20000),
             redirect: "error",
@@ -154,22 +177,112 @@ export async function workOnce() {
         where: { id: e.id },
         data: { state: "DELIVERED", lastError: null, lockedAt: null },
       });
+      operationalLog("worker.outbox_completed", {
+        jobId: e.id,
+        type: e.type,
+        propertyId: e.propertyId,
+        attempt: e.attempts + 1,
+        outcome: e.userId ? "delivered" : "consumed",
+        durationMs: Date.now() - started,
+        templateVersion: e.version,
+        traceId: e.traceId,
+      });
     } catch (error) {
+      const errorCode = operationalErrorCode(error);
       await db.outboxEvent.update({
         where: { id: e.id },
         data: {
           state: e.attempts >= 4 ? "DEAD" : "PENDING",
-          lastError:
-            error instanceof Error
-              ? error.message.slice(0, 200)
-              : "DELIVERY_FAILED",
+          lastError: errorCode,
           lockedAt: null,
           availableAt: new Date(
             Date.now() + Math.min(3600, 2 ** (e.attempts + 1) * 30) * 1000,
           ),
         },
       });
+      operationalLog(
+        "worker.outbox_failed",
+        {
+          jobId: e.id,
+          type: e.type,
+          propertyId: e.propertyId,
+          attempt: e.attempts + 1,
+          outcome: e.attempts >= 4 ? "dead" : "retry",
+          errorCode,
+          durationMs: Date.now() - started,
+          templateVersion: e.version,
+          traceId: e.traceId,
+        },
+        "error",
+      );
     }
   }
-  return { processed: pending.length, trace: token().slice(0, 8) };
+  return { processed, trace: token().slice(0, 8) };
+}
+
+async function fanOutAnnouncement(job: {
+  id: string;
+  propertyId: string | null;
+  payload: unknown;
+  version: number;
+  traceId: string;
+}) {
+  const announcementId = (job.payload as { objectId?: string })?.objectId;
+  if (!announcementId || !job.propertyId)
+    throw new Error("ANNOUNCEMENT_SCOPE_MISMATCH");
+  await transaction(async (tx) => {
+    const announcement = await tx.announcement.findUnique({
+      where: { id: announcementId },
+    });
+    if (!announcement || announcement.propertyId !== job.propertyId)
+      throw new Error("ANNOUNCEMENT_SCOPE_MISMATCH");
+    let cursor: string | undefined;
+    while (true) {
+      const recipients = await tx.user.findMany({
+        where: {
+          active: true,
+          OR: [
+            { memberships: { some: { propertyId: job.propertyId! } } },
+            {
+              applications: {
+                some: {
+                  propertyId: job.propertyId!,
+                  status: { notIn: ["DECLINED", "WITHDRAWN", "ENDED"] },
+                },
+              },
+            },
+          ],
+        },
+        select: { id: true },
+        orderBy: { id: "asc" },
+        take: 100,
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      });
+      const data = recipients.map((user) => ({
+        id: `notice_${hash(`${job.id}:${user.id}`)}`,
+        userId: user.id,
+      }));
+      await tx.notification.createMany({
+        data: data.map((entry) => ({
+          ...entry,
+          title: "New property notice",
+          body: "Read the complete property notice in your portal.",
+        })),
+        skipDuplicates: true,
+      });
+      await tx.outboxEvent.createMany({
+        data: data.map((entry) => ({
+          ...entry,
+          propertyId: job.propertyId,
+          type: "announcement.available",
+          version: job.version,
+          traceId: job.traceId,
+          payload: { objectId: announcement.id },
+        })),
+        skipDuplicates: true,
+      });
+      if (recipients.length < 100) break;
+      cursor = recipients.at(-1)!.id;
+    }
+  });
 }

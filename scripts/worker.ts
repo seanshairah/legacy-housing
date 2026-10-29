@@ -1,5 +1,6 @@
 import { workOnce } from "../src/domain/worker";
 import { db } from "../src/lib/db";
+import { operationalLog, operationalErrorCode } from "../src/lib/logger";
 let running = true;
 process.on("SIGTERM", () => {
   running = false;
@@ -11,9 +12,13 @@ while (running) {
   try {
     await workOnce();
   } catch (error) {
-    console.error(
-      "Worker cycle failed:",
-      error instanceof Error ? error.message : "unknown",
+    operationalLog(
+      "worker.cycle_failed",
+      {
+        outcome: "failed",
+        errorCode: operationalErrorCode(error, "WORKER_CYCLE_FAILED"),
+      },
+      "error",
     );
   }
   await new Promise((r) => setTimeout(r, 5000));

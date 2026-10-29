@@ -1,4 +1,5 @@
 import { LeaseTerms } from "../../components/lease-terms";
+import { PaymentEvidence } from "../../components/payment-evidence";
 import { hash } from "../../lib/security";
 import { LiveRefresh } from "../../components/live-refresh";
 import { ElectronicSigningForm } from "../../components/e-sign-form";
@@ -56,7 +57,12 @@ export default async function Portal({
       }),
       db.ticket.findMany({
         where: { userId: u.id },
-        include: { messages: { orderBy: { createdAt: "asc" } } },
+        include: {
+          messages: {
+            where: { internal: false },
+            orderBy: { createdAt: "asc" },
+          },
+        },
         orderBy: { createdAt: "desc" },
       }),
       db.notification.findMany({
@@ -140,6 +146,11 @@ export default async function Portal({
               <ArrowUpRight size={18} />
               Staff workspace
             </Link>
+          )}
+          {(!!u.memberships.length ||
+            !!u.organisationMemberships.length ||
+            !!u.platformGrant) && (
+            <Link href="/workspace/organisations">Organisation settings</Link>
           )}
         </nav>
         <div className="sidebar-bottom">
@@ -283,6 +294,7 @@ export default async function Portal({
               ) : (
                 <>
                   <p className="muted">{active.property.name}</p>
+                  {active.message && <p className="notice">{active.message}</p>}
                   <ol className="journey-steps">
                     {[
                       ["Application", "Your application is securely recorded."],
@@ -546,6 +558,16 @@ export default async function Portal({
               </div>
             )}
           </section>
+          {active && (
+            <PaymentEvidence
+              actor={u}
+              propertyId={active.propertyId}
+              page={Math.max(
+                1,
+                Math.min(10000, parseInt(q.evidencePage || "1") || 1),
+              )}
+            />
+          )}
           <section id="documents" className="panel">
             <div className="panel-head">
               <h2>Documents & agreements</h2>
@@ -857,6 +879,27 @@ export default async function Portal({
                     <small>{m.createdAt.toLocaleString("en-ZA")}</small>
                   </p>
                 ))}
+                {t.status === "RESOLVED" && (
+                  <ActionForm action="ticket.update" id={t.id}>
+                    <input type="hidden" name="status" value="CLOSED" />
+                    <input
+                      type="hidden"
+                      name="body"
+                      value="Resident confirms the resolution is satisfactory."
+                    />
+                    <label className="check-label">
+                      <input
+                        type="checkbox"
+                        name="resolutionConfirmed"
+                        required
+                      />
+                      I confirm this request has been resolved.
+                    </label>
+                    <button className="button secondary">
+                      Confirm resolution
+                    </button>
+                  </ActionForm>
+                )}
                 <ActionForm action="ticket.update" id={t.id}>
                   <input type="hidden" name="status" value="OPEN" />
                   <label>
@@ -924,6 +967,26 @@ export default async function Portal({
                 Download your account data securely ↗
               </a>
               <div className="inline-fields">
+                <label>
+                  Organisation
+                  <select name="organisationId" required>
+                    {Array.from(
+                      new Map(
+                        applications.map((a) => [
+                          a.property.organisationId,
+                          a.property.name,
+                        ]),
+                      ).entries(),
+                    ).map(([id, name]) => (
+                      <option value={id} key={id}>
+                        {name}
+                      </option>
+                    ))}
+                    {!applications.length && (
+                      <option value="mipf">MIPF — Legacy Heights</option>
+                    )}
+                  </select>
+                </label>
                 <label>
                   Request type
                   <select name="type">

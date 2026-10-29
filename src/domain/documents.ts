@@ -37,6 +37,7 @@ export async function upload(
   if (kind === "MEDICAL" && !input.medicalConsent)
     throw new Error("EXPLICIT_MEDICAL_CONSENT_REQUIRED");
   const user = await db.user.findUniqueOrThrow({ where: { id: actor.id } });
+  if (!user.active) throw new Error("UNAUTHENTICATED");
   if (!user.emailVerifiedAt || !user.phoneVerifiedAt)
     throw new Error("VERIFY_EMAIL_AND_PHONE");
   const app = await db.application.findFirst({
@@ -315,12 +316,22 @@ export async function reviewDocument(
   });
 }
 export async function download(actor: Actor, id: string) {
+  if (
+    !(
+      await db.user.findUnique({
+        where: { id: actor.id },
+        select: { active: true },
+      })
+    )?.active
+  )
+    throw new Error("UNAUTHENTICATED");
   const doc = await db.document.findUniqueOrThrow({ where: { id } });
   if (doc.userId !== actor.id) {
     if (doc.kind === "SUPPORT") {
       const ownTicket = await db.ticketMessage.findFirst({
         where: {
           documentId: doc.id,
+          internal: false,
           ticket: { propertyId: doc.propertyId, userId: actor.id },
         },
       });

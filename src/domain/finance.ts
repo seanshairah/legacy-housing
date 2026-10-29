@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { assertNoOpenPaymentDisputes } from "./payment-evidence";
 import { db, transaction, type Tx } from "../lib/db";
 import { type Actor, permit, ownerOrPermit } from "./access";
 import { event } from "./events";
@@ -330,6 +331,15 @@ export async function reviewProof(
       throw new Error("PROOF_REVIEW_INVALID");
     if (p.property.makerChecker && p.proposedBy === actor.id)
       throw new Error("MAKER_CHECKER_REQUIRED");
+    const assigned = await tx.paymentEvidence.findUnique({
+      where: { paymentId: p.id },
+      select: { assignedReviewerId: true },
+    });
+    if (
+      assigned?.assignedReviewerId &&
+      assigned.assignedReviewerId !== actor.id
+    )
+      throw new Error("ASSIGNED_FINANCE_REVIEWER_REQUIRED");
     if (decision === "REJECT") {
       await tx.payment.update({
         where: { id: p.id },
@@ -346,6 +356,7 @@ export async function reviewProof(
       );
       return;
     }
+    await assertNoOpenPaymentDisputes(tx, p.id);
     return settle(tx, p.id, actor.id, `Verified ${p.method} tender: ${reason}`);
   });
 }

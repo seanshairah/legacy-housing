@@ -1,3 +1,4 @@
+import { assertTestDatabase } from "./safety";
 import { beforeAll, afterAll, describe, it, expect } from "vitest";
 import { randomUUID, randomBytes } from "node:crypto";
 import { PDFDocument } from "pdf-lib";
@@ -50,8 +51,7 @@ import {
   verifyPaynow,
   trustedPaynowUrl,
 } from "../src/domain/paynow";
-if (!/\/legacy_test(?:\?|$)/.test(process.env.DATABASE_URL || ""))
-  throw new Error("Tests require dedicated legacy_test database");
+assertTestDatabase();
 process.env.DATA_KEY ||= randomBytes(32).toString("hex");
 process.env.FILE_KEY ||= randomBytes(32).toString("hex");
 process.env.STORAGE_ROOT = ".data/test-private";

@@ -16,14 +16,18 @@ import {
   BarChart3,
 } from "lucide-react";
 import type { ReactNode } from "react";
-export function Brand() {
+export function Brand({ displayName }: { displayName?: string } = {}) {
   return (
     <Link href="/" className="brand">
       <span className="brand-mark">
         <Building2 size={23} />
       </span>
       <span>
-        LEGACY<span className="brand-sub">H E I G H T S</span>
+        {displayName || (
+          <>
+            LEGACY<span className="brand-sub">H E I G H T S</span>
+          </>
+        )}
       </span>
     </Link>
   );

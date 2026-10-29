@@ -1,3 +1,4 @@
+import { assertTestDatabase } from "../safety";
 import AxeBuilder from "@axe-core/playwright";
 import { test, expect } from "@playwright/test";
 import { db } from "../../src/lib/db";
@@ -10,12 +11,7 @@ import {
   totp,
 } from "../../src/lib/security";
 import { randomUUID } from "node:crypto";
-const url = new URL(process.env.DATABASE_URL || "postgresql://invalid/invalid");
-if (
-  url.pathname !== "/legacy_test" ||
-  !["localhost", "127.0.0.1"].includes(url.hostname)
-)
-  throw new Error("Browser tests require a loopback legacy_test database");
+assertTestDatabase();
 async function browserFixture(staff = false) {
   const key = randomUUID(),
     password = "Browser fixture password 57!";
@@ -191,7 +187,9 @@ test("registration creates hashed contact challenges; verification is one-use", 
   const key = randomUUID();
   await page.goto("/auth");
   const response = await page.request.post("/api/auth", {
-    headers: { Origin: "http://localhost:3002" },
+    headers: {
+      Origin: process.env.LEGACY_E2E_BASE_URL || "http://localhost:3002",
+    },
     data: {
       action: "register",
       name: "New Browser Resident",
@@ -217,7 +215,9 @@ test("registration creates hashed contact challenges; verification is one-use", 
   });
   const verify = () =>
     page.request.post("/api/auth", {
-      headers: { Origin: "http://localhost:3002" },
+      headers: {
+        Origin: process.env.LEGACY_E2E_BASE_URL || "http://localhost:3002",
+      },
       data: { action: "verify", token: raw },
     });
   expect((await verify()).status()).toBe(200);

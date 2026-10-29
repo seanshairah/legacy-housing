@@ -1,5 +1,5 @@
 import { securitySignal } from "../../../lib/security-monitor";
-import { activity } from "../../../lib/activity";
+import { event } from "../../../domain/events";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { assertSameOrigin, hash } from "../../../lib/security";
@@ -11,8 +11,15 @@ import {
   enrollMfa,
   confirmMfa,
   rateLimit,
+  regenerateRecoveryCodes,
+  recoverMfa,
+  createInvitation,
+  listInvitations,
+  revokeInvitation,
+  acceptInvitation,
+  session,
 } from "../../../domain/identity";
-import { db } from "../../../lib/db";
+import { db, transaction } from "../../../lib/db";
 export async function POST(request: Request) {
   try {
     assertSameOrigin(request);
@@ -35,7 +42,10 @@ export async function POST(request: Request) {
         z.string().max(128).parse(d.password),
         d.code,
       );
-      const response = NextResponse.json({ ok: true, redirect: "/portal" });
+      const response = NextResponse.json(
+        { ok: true, redirect: "/portal" },
+        { headers: { "Cache-Control": "no-store" } },
+      );
       response.cookies.set("legacy_session", raw, {
         httpOnly: true,
         secure: process.env.NODE_ENV === "production",
@@ -60,26 +70,77 @@ export async function POST(request: Request) {
     } else if (d.action === "enroll")
       result = { ok: true, ...(await enrollMfa(d.email, d.password)) };
     else if (d.action === "confirm")
-      await confirmMfa(d.email, d.password, d.code);
-    else if (d.action === "logout") {
+      result = {
+        ok: true,
+        ...(await confirmMfa(d.email, d.password, d.code)),
+        message:
+          "Authenticator confirmed. Save the recovery codes below, then sign in.",
+      };
+    else if (d.action === "recovery-codes")
+      result = {
+        ok: true,
+        ...(await regenerateRecoveryCodes(d.email, d.password, d.code)),
+        message:
+          "Recovery codes replaced. All sessions have ended. Save these codes before signing in again.",
+      };
+    else if (d.action === "mfa-recover") {
+      await recoverMfa(d.email, d.password, d.recoveryCode);
+      result = {
+        ok: true,
+        message:
+          "Lost authenticator removed and all sessions ended. Open MFA to set up a new authenticator before using staff access.",
+      };
+    } else if (d.action === "invitation.accept") {
+      await acceptInvitation(d);
+      result = {
+        ok: true,
+        message:
+          "Invitation accepted. All previous sessions have ended. Sign in with your authenticator to use the granted role.",
+      };
+    } else if (
+      ["invitation.create", "invitation.list", "invitation.revoke"].includes(
+        d.action,
+      )
+    ) {
       const raw = request.headers
         .get("cookie")
-        ?.match(/legacy_session=([^;]+)/)?.[1];
-      if (raw) {
-        const existing = await db.session.findUnique({
-          where: { tokenHash: hash(raw) },
-        });
-        if (existing) {
-          await activity(
+        ?.match(/(?:^|;\s*)legacy_session=([^;]+)/)?.[1];
+      const actor = await session(raw);
+      if (!actor) throw new Error("UNAUTHENTICATED");
+      if (d.action === "invitation.create")
+        result = { ok: true, invitation: await createInvitation(actor, d) };
+      else if (d.action === "invitation.list")
+        result = {
+          ok: true,
+          invitations: await listInvitations(actor, d.propertyId),
+        };
+      else {
+        await revokeInvitation(actor, d.id, d.reason);
+        result = { ok: true };
+      }
+    } else if (d.action === "logout") {
+      const raw = request.headers
+        .get("cookie")
+        ?.match(/(?:^|;\s*)legacy_session=([^;]+)/)?.[1];
+      if (raw)
+        await transaction(async (tx) => {
+          const existing = await tx.session.findUnique({
+            where: { tokenHash: hash(raw) },
+          });
+          if (!existing) return;
+          await tx.session.deleteMany({ where: { tokenHash: hash(raw) } });
+          await event(
+            tx,
             existing.userId,
             null,
             "session.logged_out",
             existing.userId,
           );
-          await db.session.deleteMany({ where: { tokenHash: hash(raw) } });
-        }
-      }
-      const response = NextResponse.json({ ok: true, redirect: "/" });
+        });
+      const response = NextResponse.json(
+        { ok: true, redirect: "/" },
+        { headers: { "Cache-Control": "no-store" } },
+      );
       response.cookies.delete("legacy_session");
       return response;
     } else throw new Error("INVALID_ACTION");
@@ -92,7 +153,7 @@ export async function POST(request: Request) {
     const message =
       error instanceof z.ZodError
         ? "Please check the entered fields."
-        : error instanceof Error && /^[A-Z][A-Z_]+$/.test(error.message)
+        : error instanceof Error && /^[A-Z][A-Z0-9_]+$/.test(error.message)
           ? error.message
           : "REQUEST_FAILED";
     return NextResponse.json(

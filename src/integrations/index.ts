@@ -25,6 +25,23 @@ export const signatureProvider: SignatureProvider = {
   issue: issueLease,
 };
 export const antivirus: AntivirusScanner = { scan: scanBytes };
+const EXPORT_PAGE_SIZE = 500;
+// Query fixed-size pages while retaining every exported row. The previous fixed
+// take silently omitted records beyond 500 from otherwise successful exports.
+async function exportRows<T extends { id: string }>(
+  page: (cursor?: string) => Promise<T[]>,
+  project: (record: T) => string[],
+) {
+  const rows: string[][] = [];
+  let cursor: string | undefined;
+  while (true) {
+    const records = await page(cursor);
+    rows.push(...records.map(project));
+    if (records.length < EXPORT_PAGE_SIZE) break;
+    cursor = records.at(-1)!.id;
+  }
+  return rows;
+}
 export const accountingCsv: ExchangeConnector = {
   provider: "ACCOUNTING_CSV",
   async testConnection(actor, propertyId) {
@@ -34,11 +51,23 @@ export const accountingCsv: ExchangeConnector = {
   },
   async export(actor, propertyId) {
     await permit(actor, propertyId, "finance.read");
-    const charges = await db.charge.findMany({
-      where: { propertyId },
-      orderBy: { id: "asc" },
-      take: 500,
-    });
+    const rows = await exportRows(
+      (cursor) =>
+        db.charge.findMany({
+          where: { propertyId },
+          orderBy: { id: "asc" },
+          ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+          take: EXPORT_PAGE_SIZE,
+        }),
+      (c) => [
+        c.id,
+        c.userId,
+        c.currency,
+        String(c.amountMinor),
+        c.dueAt.toISOString(),
+        c.category,
+      ],
+    );
     return {
       headers: [
         "external_id",
@@ -48,14 +77,7 @@ export const accountingCsv: ExchangeConnector = {
         "due_at",
         "category",
       ],
-      rows: charges.map((c) => [
-        c.id,
-        c.userId,
-        c.currency,
-        String(c.amountMinor),
-        c.dueAt.toISOString(),
-        c.category,
-      ]),
+      rows,
     };
   },
 };
@@ -67,23 +89,29 @@ export const pmsCsv: ExchangeConnector = {
   },
   async export(actor, propertyId) {
     await permit(actor, propertyId, "inventory");
-    const beds = await db.bed.findMany({
-      where: { room: { floor: { building: { propertyId } } } },
-      include: {
-        room: { include: { floor: { include: { building: true } } } },
-      },
-      take: 500,
-    });
-    return {
-      headers: ["external_id", "building", "floor", "room", "space", "blocked"],
-      rows: beds.map((b) => [
+    const rows = await exportRows(
+      (cursor) =>
+        db.bed.findMany({
+          where: { room: { floor: { building: { propertyId } } } },
+          include: {
+            room: { include: { floor: { include: { building: true } } } },
+          },
+          orderBy: { id: "asc" },
+          ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+          take: EXPORT_PAGE_SIZE,
+        }),
+      (b) => [
         b.id,
         b.room.floor.building.name,
         b.room.floor.name,
         b.room.name,
         b.label,
         String(b.blocked),
-      ]),
+      ],
+    );
+    return {
+      headers: ["external_id", "building", "floor", "room", "space", "blocked"],
+      rows,
     };
   },
 };
@@ -95,18 +123,24 @@ export const sisCsv: ExchangeConnector = {
   },
   async export(actor, propertyId) {
     await permit(actor, propertyId, "admissions");
-    const students = await db.user.findMany({
-      where: {
-        residentType: "STUDENT",
-        applications: { some: { propertyId } },
-        consents: { some: { purpose: "SIS_EXCHANGE", version: "v1" } },
-      },
-      select: { id: true, institution: true },
-      take: 500,
-    });
+    const rows = await exportRows(
+      (cursor) =>
+        db.user.findMany({
+          where: {
+            residentType: "STUDENT",
+            applications: { some: { propertyId } },
+            consents: { some: { purpose: "SIS_EXCHANGE", version: "v1" } },
+          },
+          select: { id: true, institution: true },
+          orderBy: { id: "asc" },
+          ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+          take: EXPORT_PAGE_SIZE,
+        }),
+      (u) => [u.id, u.institution || ""],
+    );
     return {
       headers: ["resident_id", "institution"],
-      rows: students.map((u) => [u.id, u.institution || ""]),
+      rows,
     };
   },
 };
