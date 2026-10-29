@@ -1,6 +1,6 @@
 # Security verification results — 29 October 2026
 
-Candidate runtime `4a6efc00c1237f07e2ba4a31308fa179046b2126`, test harness `d5e53405ee21ecf19a428ed555f30dfdabebc9fc`. Exact commands, test counts, limitations and later documentation revision are in [TEST_EVIDENCE.md](../testing/TEST_EVIDENCE.md). This follows relevant OWASP ASVS 5.0 areas; it is not formal ASVS certification or legal compliance certification.
+Candidate runtime `0eb3bd8d4943a172eb41c9a4f732aa77df9a5f39`, test harness `d5e53405ee21ecf19a428ed555f30dfdabebc9fc`. Exact commands, test counts, limitations and later documentation revision are in [TEST_EVIDENCE.md](../testing/TEST_EVIDENCE.md). This follows relevant OWASP ASVS 5.0 areas; it is not formal ASVS certification or legal compliance certification.
 
 | Area                    | Actual verification                                                                                                                                                                                           | Limit                                                                                               |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
