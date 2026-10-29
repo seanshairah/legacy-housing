@@ -1264,6 +1264,11 @@ test("F09 hostile uploads, resubmission, file/invoice/statement ID substitution,
     body: payload,
   });
   await page.goto("/portal");
+  await page
+    .locator("details.ticket-detail")
+    .filter({ hasText: `Hostile text ${f.run}` })
+    .locator("summary")
+    .click();
   await expect(page.getByText(payload, { exact: true })).toBeVisible();
   expect(
     await page.evaluate(
