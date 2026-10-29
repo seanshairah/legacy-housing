@@ -21,6 +21,36 @@ import { assertTestDatabase } from "./safety";
 
 assertTestDatabase();
 process.env.DATA_KEY ||= randomBytes(32).toString("hex");
+it("a property administrator cannot promote themselves to administration of a new organisation", async () => {
+  const actor = await user(`property-only-${randomUUID()}`);
+  const organisation = await db.organisation.create({
+    data: {
+      slug: `scope-${randomUUID()}`,
+      name: "Synthetic single-property organisation",
+      legalEntity: "Synthetic entity",
+    },
+  });
+  const property = await db.property.create({
+    data: {
+      organisationId: organisation.id,
+      slug: `scope-${randomUUID()}`,
+      name: "Synthetic property",
+      description: "Scope regression",
+      location: "Test only",
+      memberships: { create: { userId: actor.id, role: "ADMIN" } },
+    },
+  });
+  await permit(actor, property.id, "settings");
+  await expect(
+    permitOrganisation(actor, organisation.id, "admin"),
+  ).rejects.toThrow("ORGANISATION_ADMIN_REQUIRED");
+  await expect(
+    grantOrganisationMembership(actor, organisation.id, actor.id, "ADMIN"),
+  ).rejects.toThrow("ORGANISATION_ADMIN_REQUIRED");
+  await expect(
+    configureOrganisationPaynow(actor, organisation.id, { mode: "disabled" }),
+  ).rejects.toThrow("ORGANISATION_ADMIN_REQUIRED");
+});
 const run = randomUUID();
 async function user(label: string) {
   return db.user.create({

@@ -1195,7 +1195,11 @@ export default async function Workspace({
           )}
           {section === "settings" && (
             <>
-              <Settings propertyId={p} next={next} />
+              <Settings
+                propertyId={p}
+                organisationId={selected.organisationId}
+                next={next}
+              />
               <InvitationPanel
                 propertyId={p}
                 roles={Object.keys(rolePermissions)}
@@ -1674,9 +1678,11 @@ async function Integrations({ propertyId }: { propertyId: string }) {
 }
 async function Settings({
   propertyId: p,
+  organisationId,
   next,
 }: {
   propertyId: string;
+  organisationId: string;
   next: string;
 }) {
   const members = await db.membership.findMany({
@@ -1688,10 +1694,14 @@ async function Settings({
       <section className="panel">
         <h2>Add a property to this client</h2>
         <p className="muted">
-          Requires client-wide administrator access. New properties remain
+          Requires organisation administrator access. New properties remain
           unpublished until inventory and factual content are approved.
         </p>
-        <ActionForm action="property.create" next={next}>
+        <ActionForm
+          action="property.create"
+          organisationId={organisationId}
+          next={next}
+        >
           <div className="inline-fields">
             {[
               ["name", "Property name"],

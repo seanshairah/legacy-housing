@@ -33,6 +33,13 @@ it("merchant credentials are isolated by organisation and existing intents retai
       },
     });
     const f = await fullFixture(organisation.id);
+    await db.organisationMembership.create({
+      data: {
+        organisationId: organisation.id,
+        userId: f.people.ADMIN.id,
+        role: "ADMIN",
+      },
+    });
     await reserve(f.people.RESIDENT, {
       bedId: f.room.beds[0].id,
       startAt: f.start,

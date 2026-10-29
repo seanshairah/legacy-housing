@@ -78,6 +78,7 @@ export async function permitOrganisation(
   // administrator explicitly granted EVERY property can manage its organisation.
   if (level === "admin") {
     if (
+      organisationId === DEFAULT_ORGANISATION_ID &&
       properties.length &&
       properties.every((p) => grants.some((g) => g.propertyId === p.id))
     )
